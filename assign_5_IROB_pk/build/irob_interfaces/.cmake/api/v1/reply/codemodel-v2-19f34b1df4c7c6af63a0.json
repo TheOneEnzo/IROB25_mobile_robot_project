@@ -1,0 +1,213 @@
+{
+	"configurations" : 
+	[
+		{
+			"directories" : 
+			[
+				{
+					"build" : ".",
+					"childIndexes" : 
+					[
+						1
+					],
+					"hasInstallRule" : true,
+					"minimumCMakeVersion" : 
+					{
+						"string" : "3.5"
+					},
+					"projectIndex" : 0,
+					"source" : ".",
+					"targetIndexes" : 
+					[
+						0,
+						1,
+						3,
+						4,
+						5,
+						6,
+						7,
+						8,
+						9,
+						10,
+						11,
+						12,
+						13,
+						14,
+						15
+					]
+				},
+				{
+					"build" : "irob_interfaces__py",
+					"minimumCMakeVersion" : 
+					{
+						"string" : "3.5"
+					},
+					"parentIndex" : 0,
+					"projectIndex" : 0,
+					"source" : "/afs/kth.se/home/t/m/tmatty/ros2_ws/src/KTH_DD2410_Assign5_2025-main/IROB25_mobile_robot_project/assign_5_IROB_pk/build/irob_interfaces/irob_interfaces__py",
+					"targetIndexes" : 
+					[
+						2
+					]
+				}
+			],
+			"name" : "",
+			"projects" : 
+			[
+				{
+					"directoryIndexes" : 
+					[
+						0,
+						1
+					],
+					"name" : "irob_interfaces",
+					"targetIndexes" : 
+					[
+						0,
+						1,
+						2,
+						3,
+						4,
+						5,
+						6,
+						7,
+						8,
+						9,
+						10,
+						11,
+						12,
+						13,
+						14,
+						15
+					]
+				}
+			],
+			"targets" : 
+			[
+				{
+					"directoryIndex" : 0,
+					"id" : "irob_interfaces::@6890427a1f51a3e7e1df",
+					"jsonFile" : "target-irob_interfaces-2187b01e7301c50bace3.json",
+					"name" : "irob_interfaces",
+					"projectIndex" : 0
+				},
+				{
+					"directoryIndex" : 0,
+					"id" : "irob_interfaces__cpp::@6890427a1f51a3e7e1df",
+					"jsonFile" : "target-irob_interfaces__cpp-9ec0c9a8aaf38c557aed.json",
+					"name" : "irob_interfaces__cpp",
+					"projectIndex" : 0
+				},
+				{
+					"directoryIndex" : 1,
+					"id" : "irob_interfaces__py::@67be60b17eb6f5b3368c",
+					"jsonFile" : "target-irob_interfaces__py-183b436d8e11a31e4dcc.json",
+					"name" : "irob_interfaces__py",
+					"projectIndex" : 0
+				},
+				{
+					"directoryIndex" : 0,
+					"id" : "irob_interfaces__python::@6890427a1f51a3e7e1df",
+					"jsonFile" : "target-irob_interfaces__python-c06184198e4fb8b95378.json",
+					"name" : "irob_interfaces__python",
+					"projectIndex" : 0
+				},
+				{
+					"directoryIndex" : 0,
+					"id" : "irob_interfaces__rosidl_generator_c::@6890427a1f51a3e7e1df",
+					"jsonFile" : "target-irob_interfaces__rosidl_generator_c-b7ed2ae2d5ed28fb12f1.json",
+					"name" : "irob_interfaces__rosidl_generator_c",
+					"projectIndex" : 0
+				},
+				{
+					"directoryIndex" : 0,
+					"id" : "irob_interfaces__rosidl_typesupport_c::@6890427a1f51a3e7e1df",
+					"jsonFile" : "target-irob_interfaces__rosidl_typesupport_c-7c8cb76da72175279f10.json",
+					"name" : "irob_interfaces__rosidl_typesupport_c",
+					"projectIndex" : 0
+				},
+				{
+					"directoryIndex" : 0,
+					"id" : "irob_interfaces__rosidl_typesupport_c__pyext::@6890427a1f51a3e7e1df",
+					"jsonFile" : "target-irob_interfaces__rosidl_typesupport_c__pyext-6cf12a66a3f7f7e48f3b.json",
+					"name" : "irob_interfaces__rosidl_typesupport_c__pyext",
+					"projectIndex" : 0
+				},
+				{
+					"directoryIndex" : 0,
+					"id" : "irob_interfaces__rosidl_typesupport_cpp::@6890427a1f51a3e7e1df",
+					"jsonFile" : "target-irob_interfaces__rosidl_typesupport_cpp-ee71decba14e03324ec3.json",
+					"name" : "irob_interfaces__rosidl_typesupport_cpp",
+					"projectIndex" : 0
+				},
+				{
+					"directoryIndex" : 0,
+					"id" : "irob_interfaces__rosidl_typesupport_fastrtps_c::@6890427a1f51a3e7e1df",
+					"jsonFile" : "target-irob_interfaces__rosidl_typesupport_fastrtps_c-adc732779ac6e6fd0ad8.json",
+					"name" : "irob_interfaces__rosidl_typesupport_fastrtps_c",
+					"projectIndex" : 0
+				},
+				{
+					"directoryIndex" : 0,
+					"id" : "irob_interfaces__rosidl_typesupport_fastrtps_c__pyext::@6890427a1f51a3e7e1df",
+					"jsonFile" : "target-irob_interfaces__rosidl_typesupport_fastrtps_c__pyext-5fee01bdf1544e8e63c3.json",
+					"name" : "irob_interfaces__rosidl_typesupport_fastrtps_c__pyext",
+					"projectIndex" : 0
+				},
+				{
+					"directoryIndex" : 0,
+					"id" : "irob_interfaces__rosidl_typesupport_fastrtps_cpp::@6890427a1f51a3e7e1df",
+					"jsonFile" : "target-irob_interfaces__rosidl_typesupport_fastrtps_cpp-caac2cd0b8b0bff4d359.json",
+					"name" : "irob_interfaces__rosidl_typesupport_fastrtps_cpp",
+					"projectIndex" : 0
+				},
+				{
+					"directoryIndex" : 0,
+					"id" : "irob_interfaces__rosidl_typesupport_introspection_c::@6890427a1f51a3e7e1df",
+					"jsonFile" : "target-irob_interfaces__rosidl_typesupport_introspection_c-7ee0bb10f20b5b3aae1b.json",
+					"name" : "irob_interfaces__rosidl_typesupport_introspection_c",
+					"projectIndex" : 0
+				},
+				{
+					"directoryIndex" : 0,
+					"id" : "irob_interfaces__rosidl_typesupport_introspection_c__pyext::@6890427a1f51a3e7e1df",
+					"jsonFile" : "target-irob_interfaces__rosidl_typesupport_introspection_c__pyext-fa6f774aa93e8d2ee3dd.json",
+					"name" : "irob_interfaces__rosidl_typesupport_introspection_c__pyext",
+					"projectIndex" : 0
+				},
+				{
+					"directoryIndex" : 0,
+					"id" : "irob_interfaces__rosidl_typesupport_introspection_cpp::@6890427a1f51a3e7e1df",
+					"jsonFile" : "target-irob_interfaces__rosidl_typesupport_introspection_cpp-58d15ff53c8ce2ffa881.json",
+					"name" : "irob_interfaces__rosidl_typesupport_introspection_cpp",
+					"projectIndex" : 0
+				},
+				{
+					"directoryIndex" : 0,
+					"id" : "irob_interfaces_uninstall::@6890427a1f51a3e7e1df",
+					"jsonFile" : "target-irob_interfaces_uninstall-0c449cdb20313f34aef6.json",
+					"name" : "irob_interfaces_uninstall",
+					"projectIndex" : 0
+				},
+				{
+					"directoryIndex" : 0,
+					"id" : "uninstall::@6890427a1f51a3e7e1df",
+					"jsonFile" : "target-uninstall-8f8b2e441c7605a5e7cd.json",
+					"name" : "uninstall",
+					"projectIndex" : 0
+				}
+			]
+		}
+	],
+	"kind" : "codemodel",
+	"paths" : 
+	{
+		"build" : "/afs/kth.se/home/t/m/tmatty/ros2_ws/src/KTH_DD2410_Assign5_2025-main/IROB25_mobile_robot_project/assign_5_IROB_pk/build/irob_interfaces",
+		"source" : "/afs/kth.se/home/t/m/tmatty/ros2_ws/src/KTH_DD2410_Assign5_2025-main/IROB25_mobile_robot_project/assign_5_IROB_pk/src/irob_interfaces"
+	},
+	"version" : 
+	{
+		"major" : 2,
+		"minor" : 0
+	}
+}

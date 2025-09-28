@@ -1,0 +1,23 @@
+{
+  "package_name": "irob_interfaces",
+  "output_dir": "/afs/kth.se/home/t/m/tmatty/ros2_ws/src/KTH_DD2410_Assign5_2025-main/IROB25_mobile_robot_project/assign_5_IROB_pk/build/irob_interfaces/rosidl_typesupport_cpp/irob_interfaces",
+  "template_dir": "/opt/ros/foxy/share/rosidl_typesupport_cpp/resource",
+  "idl_tuples": [
+    "/afs/kth.se/home/t/m/tmatty/ros2_ws/src/KTH_DD2410_Assign5_2025-main/IROB25_mobile_robot_project/assign_5_IROB_pk/build/irob_interfaces/rosidl_adapter/irob_interfaces:srv/GetGoal.idl",
+    "/afs/kth.se/home/t/m/tmatty/ros2_ws/src/KTH_DD2410_Assign5_2025-main/IROB25_mobile_robot_project/assign_5_IROB_pk/build/irob_interfaces/rosidl_adapter/irob_interfaces:srv/Activate.idl",
+    "/afs/kth.se/home/t/m/tmatty/ros2_ws/src/KTH_DD2410_Assign5_2025-main/IROB25_mobile_robot_project/assign_5_IROB_pk/build/irob_interfaces/rosidl_adapter/irob_interfaces:srv/Deactivate.idl",
+    "/afs/kth.se/home/t/m/tmatty/ros2_ws/src/KTH_DD2410_Assign5_2025-main/IROB25_mobile_robot_project/assign_5_IROB_pk/build/irob_interfaces/rosidl_adapter/irob_interfaces:srv/AtGoal.idl"
+  ],
+  "target_dependencies": [
+    "/opt/ros/foxy/lib/rosidl_typesupport_cpp/rosidl_typesupport_cpp",
+    "/opt/ros/foxy/lib/python3.8/site-packages/rosidl_typesupport_cpp/__init__.py",
+    "/opt/ros/foxy/share/rosidl_typesupport_cpp/resource/action__type_support.cpp.em",
+    "/opt/ros/foxy/share/rosidl_typesupport_cpp/resource/idl__type_support.cpp.em",
+    "/opt/ros/foxy/share/rosidl_typesupport_cpp/resource/msg__type_support.cpp.em",
+    "/opt/ros/foxy/share/rosidl_typesupport_cpp/resource/srv__type_support.cpp.em",
+    "/afs/kth.se/home/t/m/tmatty/ros2_ws/src/KTH_DD2410_Assign5_2025-main/IROB25_mobile_robot_project/assign_5_IROB_pk/build/irob_interfaces/rosidl_adapter/irob_interfaces/srv/GetGoal.idl",
+    "/afs/kth.se/home/t/m/tmatty/ros2_ws/src/KTH_DD2410_Assign5_2025-main/IROB25_mobile_robot_project/assign_5_IROB_pk/build/irob_interfaces/rosidl_adapter/irob_interfaces/srv/Activate.idl",
+    "/afs/kth.se/home/t/m/tmatty/ros2_ws/src/KTH_DD2410_Assign5_2025-main/IROB25_mobile_robot_project/assign_5_IROB_pk/build/irob_interfaces/rosidl_adapter/irob_interfaces/srv/Deactivate.idl",
+    "/afs/kth.se/home/t/m/tmatty/ros2_ws/src/KTH_DD2410_Assign5_2025-main/IROB25_mobile_robot_project/assign_5_IROB_pk/build/irob_interfaces/rosidl_adapter/irob_interfaces/srv/AtGoal.idl"
+  ]
+}

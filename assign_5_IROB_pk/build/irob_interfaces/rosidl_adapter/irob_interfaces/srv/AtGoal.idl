@@ -1,0 +1,19 @@
+// generated from rosidl_adapter/resource/srv.idl.em
+// with input from irob_interfaces/srv/AtGoal.srv
+// generated code does not contain a copyright notice
+
+
+module irob_interfaces {
+  module srv {
+    @verbatim (language="comment", text=
+      " AtGoal.srv")
+    struct AtGoal_Request {
+      uint8 structure_needs_at_least_one_member;
+    };
+    struct AtGoal_Response {
+      boolean success;
+
+      string message;
+    };
+  };
+};

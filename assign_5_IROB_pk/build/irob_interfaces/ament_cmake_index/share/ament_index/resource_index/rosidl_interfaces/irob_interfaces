@@ -1,0 +1,16 @@
+srv/Activate.idl
+srv/Activate.srv
+srv/Activate_Request.msg
+srv/Activate_Response.msg
+srv/AtGoal.idl
+srv/AtGoal.srv
+srv/AtGoal_Request.msg
+srv/AtGoal_Response.msg
+srv/Deactivate.idl
+srv/Deactivate.srv
+srv/Deactivate_Request.msg
+srv/Deactivate_Response.msg
+srv/GetGoal.idl
+srv/GetGoal.srv
+srv/GetGoal_Request.msg
+srv/GetGoal_Response.msg

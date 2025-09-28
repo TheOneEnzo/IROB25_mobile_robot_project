@@ -1,0 +1,19 @@
+// generated from rosidl_adapter/resource/srv.idl.em
+// with input from irob_interfaces/srv/Activate.srv
+// generated code does not contain a copyright notice
+
+
+module irob_interfaces {
+  module srv {
+    @verbatim (language="comment", text=
+      " No request fields, no response fields needed")
+    struct Activate_Request {
+      uint8 structure_needs_at_least_one_member;
+    };
+    struct Activate_Response {
+      boolean success;
+
+      string message;
+    };
+  };
+};

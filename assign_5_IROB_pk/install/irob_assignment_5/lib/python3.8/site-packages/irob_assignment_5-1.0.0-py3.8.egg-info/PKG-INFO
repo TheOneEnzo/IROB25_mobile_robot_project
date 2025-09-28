@@ -1,0 +1,12 @@
+Metadata-Version: 2.1
+Name: irob-assignment-5
+Version: 1.0.0
+Summary: Intro to robotics-KTH assignment 5
+Home-page: UNKNOWN
+Maintainer: Parag Khanna
+Maintainer-email: paragk@kth.se
+License: Apache-2.0
+Description: UNKNOWN
+Platform: UNKNOWN
+Requires-Python: >=3.5
+Provides-Extra: rosidl_default_runtime

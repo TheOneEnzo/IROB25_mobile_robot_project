@@ -1,0 +1,9 @@
+{
+  "package_name": "irob_interfaces",
+  "non_idl_tuples": [
+    "/afs/kth.se/home/t/m/tmatty/ros2_ws/src/KTH_DD2410_Assign5_2025-main/IROB25_mobile_robot_project/assign_5_IROB_pk/src/irob_interfaces:srv/GetGoal.srv",
+    "/afs/kth.se/home/t/m/tmatty/ros2_ws/src/KTH_DD2410_Assign5_2025-main/IROB25_mobile_robot_project/assign_5_IROB_pk/src/irob_interfaces:srv/Activate.srv",
+    "/afs/kth.se/home/t/m/tmatty/ros2_ws/src/KTH_DD2410_Assign5_2025-main/IROB25_mobile_robot_project/assign_5_IROB_pk/src/irob_interfaces:srv/Deactivate.srv",
+    "/afs/kth.se/home/t/m/tmatty/ros2_ws/src/KTH_DD2410_Assign5_2025-main/IROB25_mobile_robot_project/assign_5_IROB_pk/src/irob_interfaces:srv/AtGoal.srv"
+  ]
+}

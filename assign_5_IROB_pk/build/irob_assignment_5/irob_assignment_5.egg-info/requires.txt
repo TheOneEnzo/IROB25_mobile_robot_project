@@ -1,0 +1,4 @@
+setuptools
+
+[rosidl_default_runtime]
+rosidl_default_runtime

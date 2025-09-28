@@ -1,0 +1,6 @@
+[console_scripts]
+activation_server = irob_assignment_5.activation_server:main
+at_goal_server = irob_assignment_5.at_goal_server:main
+explorer = irob_assignment_5.explorer:main
+goal_server = irob_assignment_5.goal_server:main
+
