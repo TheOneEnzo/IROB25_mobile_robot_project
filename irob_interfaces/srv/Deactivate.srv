@@ -1,0 +1,5 @@
+# No request fields, no response fields needed
+---
+bool success
+string message
+
