@@ -1,0 +1,54 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>irob_assignment_5</name>
+  <version>0.0.0</version>
+  <description>Introduction to Robotics-KTH course assignment 5</description>
+   <maintainer email="paragk@kth.se">Parag Khanna </maintainer>
+  <author email="paragkhanna1@gmail.com">Parag Khanna</author>
+  <license>Apache-2.0</license> <!-- It's required to add a license -->
+
+  <buildtool_depend>ament_python</buildtool_depend>
+
+  <!-- Dependencies for all your nodes -->
+  <depend>rclpy</depend>
+  <!-- <depend>geometry_msgs</depend> -->
+  <depend>action_msgs</depend>
+  <depend>sensor_msgs</depend>
+  <depend>std_msgs</depend>
+  <depend>slam_toolbox</depend>
+  <depend>tf2_ros</depend>
+  <depend>python-transforms3d-pip</depend>
+  <depend>tf2_geometry_msgs</depend>
+  <depend>visualization_msgs</depend>
+  <!-- <depend>interfaces</depend> -->
+  <!-- actionlib and actionlib_msgs are now part of rclpy and standard message packages -->
+  <build_depend>geometry_msgs</build_depend>
+  <exec_depend>geometry_msgs</exec_depend>
+  <build_depend>nav_msgs</build_depend>
+  <exec_depend>nav_msgs</exec_depend>
+  <!-- For building custom messages/services/actions -->
+  <buildtool_depend>ament_cmake</buildtool_depend>
+  <build_depend>rosidl_default_generators</build_depend>
+  <exec_depend>rosidl_default_runtime</exec_depend>
+  <member_of_group>rosidl_interface_packages</member_of_group>
+  
+
+  <build_depend>builtin_interfaces</build_depend>
+
+  <!-- #adds both build and exec depends-->
+  <depend>irob_interfaces</depend> 
+  
+  <!-- Standard testing dependencies -->
+  <test_depend>ament_copyright</test_depend>
+  <test_depend>ament_flake8</test_depend>
+  <test_depend>ament_pep257</test_depend>
+  <test_depend>python3-pytest</test_depend>
+
+  <export>
+    <build_type>ament_python</build_type>
+    <!-- <build_type>ament_cmake</build_type> -->
+
+  </export>
+</package>
+

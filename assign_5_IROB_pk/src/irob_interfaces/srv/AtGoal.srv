@@ -1,0 +1,5 @@
+# AtGoal.srv
+---
+bool success
+string message
+
