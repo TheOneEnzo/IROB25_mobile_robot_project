@@ -11,7 +11,7 @@ from nav_msgs.msg import Odometry
 from sensor_msgs.msg import LaserScan
 from std_msgs.msg import Bool
 
-import math
+import numpy as np
 import time
 #necessary imports here , follow basic Ros2 node stuff
 
@@ -30,7 +30,7 @@ class SMStudentsNode(Node):
         #clients
         self.activate_client = self.create_client(Activate, 'activate')
         self.deactivate_client = self.create_client(Deactivate, 'deactivate')
-        self.get_goal_client = self.create_client(GetGoal, 'get_goal')
+        self.goal_client = self.create_client(GetGoal, 'get_goal')
         self.at_goal_client = self.create_client(AtGoal, 'at_goal')
         
         #publisher
@@ -49,7 +49,11 @@ class SMStudentsNode(Node):
         self.current_pose = None
         self.current_orientation = None        
         self.current_goal = None
+        self.current_yaw = None
         self.active = False
+        self.scan_data = None # not sure if we need it for E part
+        self.start_time = None 
+        self.last_distance = None
 
         #state machine
         self.state = "INACTIVE"
@@ -71,19 +75,87 @@ class SMStudentsNode(Node):
         #Do some awesome stuff here!
         activate_response = self.activate_client.call(Activate.Request())
         self.get_logger().info(activate_response.message)
-        self.state = "GET_GOAL"
+        self.state = 'GET_GOAL'
         response.success = True
-        response.message = "State machine activated."
+        response.message = 'State machine activated.'
         return response    
 
     def handle_deactivate_robot(self, request, response):
         deactivate_response = self.deactivate_client.call(Deactivate.Request())
         self.get_logger().info(deactivate_response.message)
         #should we set 0 velocity by ourselves?
-        self.state = "INACTIVE"
+        self.state = 'INACTIVE'
         response.success = True
-        response.message = "State machine deactivated."
+        response.message = 'State machine deactivated.'
         return response
+
+    def publish_zero_velocity(self):
+        #two vectors (vector3), linear and angular
+        velocity = Twist()
+        velocity.linear.x = 0.0
+        velocity.angular.z = 0.0
+        self.cmd_vel_pub.publish(velocity)
+
+#??? when shall we deactive the robot for E part? Once we reach the goal?
+    def state_machine_callback(self):
+        #inactive
+        if self.state == 'INACTIVE' or self.active == False:
+            return
+        
+        #get a goal / going to goal / checking if reached 
+        if self.state == 'GET_GOAL':
+            request = GetGoal.Request()
+            response = self.goal_client.call(request)
+            goal = (response.goal_x, response.goal_y)
+            self.get_logger().info('Goal received: ')
+            self.get_logger().info(goal)
+
+            self.current_goal = goal
+
+            # any other way to check?
+            if self.current_goal == None or current_pose == None:
+                self.get_logger().warn('Not a reachable goal.')
+
+            else:
+                self.state = 'GOTO_GOAL'
+        
+        elif self.state == 'GOTO_GOAL':
+            if self.current_goal == None or current_pose == None:
+                return
+
+            dx = current_goal[0] - current_pose[0]
+            dy = current_goal[1] - current_pose[1]
+            distance = np.sqrt(dx**2 + dy**2)
+            if self.last_distance == None:
+                self.last_distance = distance
+
+            #checking timeout
+            if time.time() - self.start_time > 60:
+                self.get_logger().warn('Timeout: failed to reach goal')
+                self.publish_zero_velocity()
+                self.start_time = None
+                self.state = "GET_GOAL"
+                return
+
+            #checking stuck
+            if abs(distance - self.last_distance) < 0.01 and distance > 0.1:
+                self.get_logger().warn('Stuck: failed to reach goal')
+                self.publish_zero_velocity()
+                self.start_time = None
+                self.state = "GET_GOAL"
+                return
+            
+            self.last_distance = distance
+            #calculate yaw and angular error
+            angle = np.arctan2(dy,dx)
+            q = self.current_orientation
+            siny_cosp = 2 * (q.w * q.z + q.x * q.y)
+            cosy_cosp = 1 - 2 * (q.y * q.y + q.z * q.z)
+            self.current_yaw = np.arctan2(siny_cosp, cosy_cosp)
+            angular_error = angle - self.current_yaw
+            angular_error = (angular_error + np.pi) % (2 * np.pi) - np.pi
+            
+            #move to goal
 
 def main(args=None):
     pass
