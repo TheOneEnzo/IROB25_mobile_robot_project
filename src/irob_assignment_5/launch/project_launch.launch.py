@@ -16,7 +16,8 @@ pkg_irob_assignment_5 = "/home/y/i/yikunw/DD2410_5/src/irob_assignment_5"
 # Launch node/executable activation_server
 # Launch node/executable at_goal_server 
     pkg_share = get_package_share_directory('<your_package_name>')
-    goals_param = os.path.join(pkg_share, 'config', 'goals_set.yaml')
+    goals_param = os.path.join(pkg_share, 'config', 'goals_params_SM.yaml')
+    #!!! have to change different params files when dealing with different tasks!
 
     return LaunchDescription([
         Node(
