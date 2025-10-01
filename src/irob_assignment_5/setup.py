@@ -37,6 +37,7 @@ setup(
             'goal_server = irob_assignment_5.goal_server:main',
             'activation_server = irob_assignment_5.activation_server:main',
             'at_goal_server = irob_assignment_5.at_goal_server:main',
+            'SM_students = irob_assignment_5.SM_students:main'
         ],
     },
 )
