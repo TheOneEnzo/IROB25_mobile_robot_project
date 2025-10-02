@@ -7,7 +7,7 @@ from Activate.srv import Activate
 from Deactivate.srv import Deactivate
 from AtGoal.srv import AtGoal
 from geometry_msgs.msg import Twist
-from nav_msgs.msg import Odometry
+from nav_msgs.msg import Odometry, OccupancyGrid#get map without Laserscan
 from sensor_msgs.msg import LaserScan
 from std_msgs.msg import Bool
 
@@ -54,6 +54,7 @@ class SMStudentsNode(Node):
         self.scan_data = None # not sure if we need it for E part
         self.start_time = None 
         self.last_distance = None
+        self.map_data = None
 
         #state machine
         self.state = "INACTIVE"
@@ -70,6 +71,9 @@ class SMStudentsNode(Node):
 
     def scan_callback(self, msg):
         self.scan_data = msg
+
+    def map_callback(self, msg):
+        self.map_data = msg
 
     def handle_activate_robot(self, request, response):
         #Do some awesome stuff here!
@@ -96,6 +100,25 @@ class SMStudentsNode(Node):
         velocity.angular.z = 0.0
         self.cmd_vel_pub.publish(velocity)
 
+    def goal_reachable(self):
+        if self.current_goal == None or current_pose == None:
+            return False
+        
+        goal_map = self.map_data.info
+        goal_x = (self.current_goal[0] - goal_map.origin.position.x) / goal_map.resolution
+        goal_y = (self.current_goal[1] - goal_map.origin.position.y) / goal_map.resolution
+        #index for 1D array
+        goal_idx = int(goal_y * goal_map.width + goal_x)
+
+        if goal_idx < 0 or goal_idx >= len(self.map_data.data):
+            return False
+
+        goal = self.map_data.data[goal_idx]
+        if goal == 0:
+            return True
+        else:
+            return False
+
 #??? when shall we deactive the robot for E part? Once we reach the goal?
     def state_machine_callback(self):
         #inactive
@@ -113,11 +136,14 @@ class SMStudentsNode(Node):
             self.current_goal = goal
 
             # any other way to check?
-            if self.current_goal == None or current_pose == None:
-                self.get_logger().warn('Not a reachable goal.')
-
-            else:
+            if self.goal_reachable():
+                #initialize
+                self.start_time = time.time()
+                self.last_distance = None
                 self.state = 'GOTO_GOAL'
+            
+            else:
+                self.get_logger().warn('Not a reachable goal.')
         
         elif self.state == 'GOTO_GOAL':
             if self.current_goal == None or current_pose == None:
@@ -156,12 +182,36 @@ class SMStudentsNode(Node):
             angular_error = (angular_error + np.pi) % (2 * np.pi) - np.pi
             
             #move to goal
+            
+            #hardcode first
+            if distance < 0.05: #threshold
+                self.publish_zero_velocity()
+                self.state = 'AT_GOAL'
+                return
+
+            velocity = Twist()
+            velocity.linear.x = min(0.5, distance) #max v = 0.5
+            velocity.angular.z = angular_error * 1.0 #try kp = 1
+            self.cmd_vel_pub.publish(velocity)
+
+        elif self.state == 'AT_GOAL':
+            request = AtGoal.Request()
+            response = self.at_goal_client.call(request)
+            if response.success:
+                self.get_logger().info('Goal reached. Stop now yah!')
+                self.state = 'INACTIVE'
+            else:
+                self.get_logger().warn('Not at goal! Check your code!')
+                self.state = 'GOTO_GOAL'
 
 def main(args=None):
-    pass
     # what to do here?
-    
+    rclpy.init(args=args)
+    node = SMStudentsNode()
+    rclpy.spin(node)
 
+    node.destroy_node()
+    rclpy.shutdown()
 
 if __name__ == '__main__':
     main()
