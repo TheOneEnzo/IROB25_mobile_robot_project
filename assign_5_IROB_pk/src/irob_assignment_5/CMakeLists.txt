@@ -40,6 +40,7 @@ install(PROGRAMS
   ${PROJECT_NAME}/goal_server.py  
   ${PROJECT_NAME}/activation_server.py
   ${PROJECT_NAME}/at_goal_server.py
+  ${PROJECT_NAME}/SM_students.py
   DESTINATION lib/${PROJECT_NAME} 
 )
 
