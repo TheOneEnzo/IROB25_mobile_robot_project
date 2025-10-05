@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 import rclpy
 from rclpy.node import Node
 
@@ -97,6 +96,8 @@ class SMStudentsNode(Node):
         else:
             self.get_logger().error("Failed to deactivate robot.")
         self.publish_zero_velocity()
+
+
         self.state = 'INACTIVE'
         response.success = True
         response.message = 'State machine deactivated.'
@@ -132,6 +133,76 @@ class SMStudentsNode(Node):
         goal = self.map_data.data[goal_idx]
         return True
 
+    def is_goal_direction_clear(self):
+        """
+        Check if there are obstacles in the direction of the goal using laser scan
+        Returns True if the path to goal is clear, False if blocked by obstacles
+        """
+        if self.scan_data is None or self.current_goal is None or self.current_pose is None:
+            self.get_logger().warn("Missing scan, goal, or pose data for obstacle check")
+            return True  # Assume clear if no data
+        
+        # Calculate distance and angle to goal
+        dx = self.current_goal[0] - self.current_pose[0]
+        dy = self.current_goal[1] - self.current_pose[1]
+        goal_distance = np.sqrt(dx**2 + dy**2)
+        goal_angle = np.arctan2(dy, dx)
+        
+        # Get robot's current orientation
+        q = self.current_orientation
+        siny_cosp = 2 * (q.w * q.z + q.x * q.y)
+        cosy_cosp = 1 - 2 * (q.y**2 + q.z**2)
+        current_yaw = np.arctan2(siny_cosp, cosy_cosp)
+        
+        # Relative angle to goal (robot frame)
+        relative_angle = goal_angle - current_yaw
+        relative_angle = (relative_angle + np.pi) % (2 * np.pi) - np.pi  # Normalize to [-pi, pi]
+        
+        # Convert to scan index
+        scan_index = int((relative_angle - self.scan_data.angle_min) / self.scan_data.angle_increment)
+        
+        # Check if scan index is valid
+        if 0 <= scan_index < len(self.scan_data.ranges):
+            obstacle_distance = self.scan_data.ranges[scan_index]
+            
+            # Check if there's a valid obstacle reading closer than the goal
+            if (not np.isinf(obstacle_distance) and 
+                obstacle_distance < goal_distance and 
+                obstacle_distance < 1.5):  # 1.5m safety threshold
+                self.get_logger().warn(f"Obstacle detected at {obstacle_distance:.2f}m in goal direction (goal is {goal_distance:.2f}m away)")
+                return False
+            
+            # Also check adjacent scan points for wider obstacle detection
+            for offset in [-2, -1, 1, 2]:  # Check nearby scan points
+                adjacent_index = scan_index + offset
+                if 0 <= adjacent_index < len(self.scan_data.ranges):
+                    adjacent_distance = self.scan_data.ranges[adjacent_index]
+                    if (not np.isinf(adjacent_distance) and 
+                        adjacent_distance < goal_distance and 
+                        adjacent_distance < 1.0):  # Stricter threshold for adjacent points
+                        self.get_logger().warn(f"Obstacle detected at {adjacent_distance:.2f}m near goal direction")
+                        return False
+        
+        self.get_logger().info(f"Goal direction is clear - no obstacles detected")
+        return True
+
+    def is_goal_attainable(self):
+        """
+        Combined check using both map occupancy and laser scan obstacle detection
+        """
+        # First check if goal is reachable in the map
+        if not self.goal_reachable():
+            self.get_logger().warn("Goal is not reachable according to map")
+            return False
+        
+        # Then check if there are obstacles in the way using laser scan
+        if not self.is_goal_direction_clear():
+            self.get_logger().warn("Goal direction is blocked by obstacles")
+            return False
+        
+        self.get_logger().info("Goal is attainable - both map and laser scan checks passed")
+        return True
+
     def deactivate_robot(self):
         future = self.deactivate_client.call_async(Deactivate.Request())
         rclpy.spin_until_future_complete(self, future)
@@ -141,6 +212,7 @@ class SMStudentsNode(Node):
             self.get_logger().error("Failed to deactivate robot.")
         self.publish_zero_velocity()
 
+
     # Async callback for get_goal response
     def goal_response_callback(self, future):
         try:
@@ -149,7 +221,7 @@ class SMStudentsNode(Node):
             # Detect end of goal list
             if response.goal_x == float('inf') or response.goal_y == float('inf'):
                 self.get_logger().info("No more goals. Deactivating robot.")
-                self.publish_zero_velocity()
+                #self.publish_zero_velocity()
                 self.deactivate_robot()
                 self.state = 'INACTIVE'
                 return
@@ -173,6 +245,7 @@ class SMStudentsNode(Node):
 
     def state_machine_callback(self):
         if self.state == 'INACTIVE':
+            self.get_logger().info("State: INACTIVE")
             return
 
         if self.state == 'GET_GOAL':
@@ -188,6 +261,7 @@ class SMStudentsNode(Node):
                 self.goal_future.add_done_callback(self.goal_response_callback)
 
         elif self.state == 'GOTO_GOAL':
+            self.get_logger().info("State: GOTO_GOAL")
             if self.current_goal is None or self.current_pose is None:
                 self.get_logger().warn("Cannot navigate - missing goal or pose")
                 return
@@ -212,16 +286,41 @@ class SMStudentsNode(Node):
                 self.publish_zero_velocity()
                 self.state = 'GET_GOAL'
                 return
+            
+            self.get_logger().info(str(self.last_distance))
+
 
             # Check if robot is stuck (only after stuck detection has started)
-            if (self.stuck_check_start_time is not None and 
-                time.time() - self.stuck_check_start_time > 10.0 and 
-                abs(distance - self.stuck_check_initial_distance) < 0.1 and 
-                distance > 0.1):
-                self.get_logger().warn(f'Robot stuck, retrying... Distance: {distance:.2f}')
-                self.publish_zero_velocity()
-                self.state = 'GET_GOAL'
-                return
+            if self.stuck_check_start_time is not None:
+                if ( time.time() - self.stuck_check_start_time > 10.0) or (distance < 0.3):
+                    self.get_logger().warn(f'Robot stuck, retrying... Distance: {distance:.2f}')
+                    self.publish_zero_velocity()
+
+                    velocity = Twist()
+                    velocity.linear.x = -1.0
+                    self.cmd_vel_pub.publish(velocity)
+
+                    time.sleep(1)
+
+                    velocity = Twist()
+                    velocity.angular.z = 0.8  # Turn left at moderate speed
+                    self.cmd_vel_pub.publish(velocity)
+                    self.get_logger().info("Turning left 90 degrees...")
+                    time.sleep(2)
+
+                    self.state = 'GET_GOAL'
+                    return
+            
+                elif abs(distance-self.last_distance) < 0.02 and (time.time() - self.stuck_check_start_time) > 0.2:
+                    velocity = Twist()
+                    velocity.linear.x = -1.0
+                    self.cmd_vel_pub.publish(velocity)
+                    time.sleep(1)
+
+                    velocity = Twist()
+                    velocity.angular.z = 0.8  # Turn left at moderate speed
+                    self.cmd_vel_pub.publish(velocity)
+                    time.sleep(2)
 
             self.last_distance = distance
 
@@ -238,37 +337,33 @@ class SMStudentsNode(Node):
             if distance < 0.1:  # Increased tolerance
                 self.get_logger().info(f"Reached goal! Distance: {distance:.2f}")
                 self.publish_zero_velocity()
+
+
+
                 # Now that we're at the goal, check if it's actually reachable/valid
                 self.state = 'CHECK_GOAL_VALIDITY'
                 return
 
-            # Publish velocity command - only if we haven't published recently or orientation is good
-            current_time = time.time()
-            if (self.last_velocity_publish_time is None or 
-                current_time - self.last_velocity_publish_time > 0.1 or 
-                abs(angular_error) < 0.5):  # Only move if reasonably aligned
-                
-                velocity = Twist()
-                
-                # Only move forward if reasonably aligned with goal
-                if abs(angular_error) < 1.0:  # ~57 degrees
-                    velocity.linear.x = min(0.2, distance)  # Reduced max speed
-                else:
-                    velocity.linear.x = 0.0
-                
-                velocity.angular.z = np.clip(angular_error * 2.0, -1.0, 1.0)  # Increased gain, limited
-                
-                self.cmd_vel_pub.publish(velocity)
-                self.last_velocity_publish_time = current_time
-                
-                if current_time - self.start_time < 5.0:  # Log more frequently at start
-                    self.get_logger().info(f"Publishing velocity: lin_x={velocity.linear.x:.2f}, ang_z={velocity.angular.z:.2f}, dist={distance:.2f}, ang_err={angular_error:.2f}")
+            velocity = Twist()
+            
+            # Only move forward if reasonably aligned with goal
+            if abs(angular_error) < 0.3:
+                velocity.linear.x = min(0.5, distance)  # Reduced max speed
+            elif abs(angular_error) < 1.0:
+                velocity.linear.x = min(0.3, distance*0.5)
+            else:
+                velocity.linear.x = 0.1# check if we overwrite the vel
+            
+            velocity.angular.z = np.clip(angular_error * 2.0, -1.0, 1.0)  # Increased gain, limited
+            
+            self.cmd_vel_pub.publish(velocity)
+            
+            self.get_logger().info(f"PUBLISHING: lin_x={velocity.linear.x:.2f}, ang_z={velocity.angular.z:.2f}, dist={distance:.2f}, ang_err={angular_error:.2f}")
 
         elif self.state == 'CHECK_GOAL_VALIDITY':
-            # Now check if the goal we just reached is valid/reachable
-            if self.goal_reachable():
-                self.get_logger().info('Goal reached successfully and is valid. Deactivating.')
-                self.publish_zero_velocity()
+            # Now check if the goal we just reached is valid/reachable using combined check
+            if self.is_goal_attainable():
+                self.get_logger().info('Goal reached successfully and is attainable. Deactivating.')
                 self.deactivate_robot()
                 self.state = 'INACTIVE'
             else:
