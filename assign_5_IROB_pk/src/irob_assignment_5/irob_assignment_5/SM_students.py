@@ -48,7 +48,7 @@ class SMStudentsNode(Node):
         self.stuck_check_start_time = None
         self.stuck_check_initial_distance = None
         self.last_velocity_publish_time = None
-
+        self.goal_nmr = 0
         # For tracking async goal request
         self.goal_future = None
 
@@ -291,24 +291,26 @@ class SMStudentsNode(Node):
 
 
             # Check if robot is stuck (only after stuck detection has started)
-            if self.stuck_check_start_time is not None:
+            if self.stuck_check_start_time is not None and self.goal_nmr <2:
                 if ( time.time() - self.stuck_check_start_time > 10.0) or (distance < 0.3):
                     self.get_logger().warn(f'Robot stuck, retrying... Distance: {distance:.2f}')
                     self.publish_zero_velocity()
 
                     velocity = Twist()
-                    velocity.linear.x = -1.0
+                    velocity.linear.x = -0.6
                     self.cmd_vel_pub.publish(velocity)
 
                     time.sleep(1)
 
                     velocity = Twist()
                     velocity.angular.z = 0.8  # Turn left at moderate speed
+                    velocity.linear.x = 0.2
                     self.cmd_vel_pub.publish(velocity)
                     self.get_logger().info("Turning left 90 degrees...")
                     time.sleep(2)
 
                     self.state = 'GET_GOAL'
+                    self.goal_nmr += 1
                     return
             
                 elif abs(distance-self.last_distance) < 0.02 and (time.time() - self.stuck_check_start_time) > 0.2:
@@ -348,7 +350,7 @@ class SMStudentsNode(Node):
             
             # Only move forward if reasonably aligned with goal
             if abs(angular_error) < 0.3:
-                velocity.linear.x = min(0.5, distance)  # Reduced max speed
+                velocity.linear.x = min(0.3, distance)  # Reduced max speed
             elif abs(angular_error) < 1.0:
                 velocity.linear.x = min(0.3, distance*0.5)
             else:
