@@ -61,14 +61,20 @@ class SMStudentsNode(Node):
         self.safe_distance = 0.2  # Safe distance from obstacles
         self.min_obstacle_distance = 0.2  # Minimum obstacle distance
         self.obstacle_angle_range = 60  # Obstacle detection angle range (degrees)
-        self.avoidance_duration = 2.0  # Avoidance duration
-        self.avoidance_stuck_threshold = 2  # Maximum direction changes before giving up
+        self.avoidance_duration = 5.0  # Avoidance duration
+        self.avoidance_stuck_threshold = 4  # Maximum direction changes before giving up
         
         # Recovery behavior parameters
         self.recovery_mode = False
         self.recovery_start_time = None
         self.recovery_duration = 8.0  # Maximum recovery time
         self.last_recovery_pose = None  # Track position during recovery
+
+        # Goal unreachable detection
+        self.goal_unreachable = False
+        self.last_progress_time = None
+        self.min_progress_distance = 0.1  # Minimum progress in 10 seconds
+        self.progress_check_interval = 10.0  # Check progress every 10 seconds
 
         # For tracking async goal request
         self.goal_future = None
@@ -152,7 +158,7 @@ class SMStudentsNode(Node):
             return response
 
         
-        if not self.activate_client.wait_for_service(timeout_sec=1.0):
+        if not self.activate_client.wait_for_service(timeout_sec=2.0):
             self.get_logger().warn('activate service not available.')
             response.success = False
             response.message = "Activate service not available."
@@ -160,7 +166,7 @@ class SMStudentsNode(Node):
 
         self.get_logger().info("Calling activate service to activate robot...")
         activate_request = Activate.Request()
-        self.activate_future = self.activate_client.call_async(activate_request)
+        self.activate_future = self.create_client(Activate, 'activate').call_async(activate_request)
         self.activate_future.add_done_callback(self.activation_response_callback)
 
         response.success = True
@@ -182,7 +188,7 @@ class SMStudentsNode(Node):
 
     def handle_deactivate_robot(self, request, response):
         
-        if not self.deactivate_client.wait_for_service(timeout_sec=1.0):
+        if not self.deactivate_client.wait_for_service(timeout_sec=2.0):
             self.get_logger().warn('deactivate service not available.')
             response.success = False
             response.message = "Deactivate service not available."
@@ -224,55 +230,96 @@ class SMStudentsNode(Node):
         self.cmd_vel_pub.publish(velocity)
         self.get_logger().debug("Published zero velocity")
         
-    def goal_reachable(self):
-        """Improved goal reachability check"""
-        if self.current_goal is None:
-            self.get_logger().warn("No current goal.")
+    def is_goal_reachable(self, distance_to_goal):
+        """Check if goal is reachable using laser scan data"""
+        if self.scan_data is None or self.current_goal is None or self.current_pose is None:
+            return True  # Can't check, assume reachable
+            
+        # Calculate the angle to the goal
+        dx = self.current_goal[0] - self.current_pose[0]
+        dy = self.current_goal[1] - self.current_pose[1]
+        goal_angle = math.atan2(dy, dx)
+        
+        # Get robot's current orientation
+        q = self.current_orientation
+        siny_cosp = 2 * (q.w * q.z + q.x * q.y)
+        cosy_cosp = 1 - 2 * (q.y**2 + q.z**2)
+        robot_yaw = math.atan2(siny_cosp, cosy_cosp)
+        
+        # Calculate relative angle to goal in robot's frame
+        relative_angle = goal_angle - robot_yaw
+        relative_angle = (relative_angle + math.pi) % (2 * math.pi) - math.pi  # Normalize to [-pi, pi]
+        
+        # Convert to degrees
+        relative_angle_deg = math.degrees(relative_angle)
+        
+        # Get laser scan parameters
+        angle_min = math.degrees(self.scan_data.angle_min)
+        angle_max = math.degrees(self.scan_data.angle_max)
+        angle_increment = math.degrees(self.scan_data.angle_increment)
+        
+        # Calculate laser scan index for the goal direction
+        goal_index = int((relative_angle_deg - angle_min) / angle_increment)
+        
+        # Check if goal index is within valid range
+        if goal_index < 0 or goal_index >= len(self.scan_data.ranges):
+            return True  # Goal outside laser scan range, assume reachable
+        
+        # Get distance to obstacle in goal direction
+        obstacle_distance = self.scan_data.ranges[goal_index]
+        
+        # Also check a small cone around the goal direction
+        cone_width = 5  # degrees
+        cone_indices = int(cone_width / angle_increment)
+        
+        min_obstacle_distance = float('inf')
+        for i in range(max(0, goal_index - cone_indices), min(len(self.scan_data.ranges), goal_index + cone_indices + 1)):
+            dist = self.scan_data.ranges[i]
+            if not (math.isinf(dist) or math.isnan(dist)):
+                min_obstacle_distance = min(min_obstacle_distance, dist)
+        
+        # If there's an obstacle closer than the goal, and we're close to the goal, it's unreachable
+        if (min_obstacle_distance < distance_to_goal + 0.1 and  # Obstacle is closer than goal + small margin
+            distance_to_goal < 0.4):  # Only check when we're close to goal
+            self.get_logger().warn(f"Goal unreachable: obstacle at {min_obstacle_distance:.2f}m, goal at {distance_to_goal:.2f}m")
             return False
+            
+        return True
 
-        if self.current_pose is None:
-            self.get_logger().warn("No current pose.")
+    def check_progress_toward_goal(self):
+        #Check stuck
+        if self.current_goal is None or self.current_pose is None:
+            return True  # Can't check progress, assume we're making progress
+            
+        # Calculate current distance to goal
+        dx = self.current_goal[0] - self.current_pose[0]
+        dy = self.current_goal[1] - self.current_pose[1]
+        current_distance = math.sqrt(dx**2 + dy**2)
+        
+        # Initialize progress tracking
+        if self.last_progress_time is None:
+            self.last_progress_time = time.time()
+            self.last_distance = current_distance
+            return True
+            
+        # Check if enough time has passed to evaluate progress
+        if time.time() - self.last_progress_time < self.progress_check_interval:
+            return True
+            
+        # Check if we've made sufficient progress
+        progress = self.last_distance - current_distance
+        self.get_logger().info(f"Progress check: moved {progress:.2f}m in {self.progress_check_interval}s")
+        
+        # Reset progress tracking
+        self.last_progress_time = time.time()
+        self.last_distance = current_distance
+        
+        # If we haven't made sufficient progress, goal might be unreachable
+        if progress < self.min_progress_distance:
+            self.get_logger().warn(f"Insufficient progress ({progress:.2f}m), goal might be unreachable")
             return False
-
-        if self.map_data is None:
-            self.get_logger().warn("No map data.")
-            return True  # If no map data, assume goal is reachable
-
-        try:
-            goal_map = self.map_data.info
-            # Convert goal coordinates to map coordinates
-            goal_x = int((self.current_goal[0] - goal_map.origin.position.x) / goal_map.resolution)
-            goal_y = int((self.current_goal[1] - goal_map.origin.position.y) / goal_map.resolution)
             
-            # Check if coordinates are within map bounds
-            if (goal_x < 0 or goal_x >= goal_map.width or 
-                goal_y < 0 or goal_y >= goal_map.height):
-                self.get_logger().warn(f"Goal coordinates out of map bounds: ({goal_x}, {goal_y})")
-                return False
-            
-            goal_idx = goal_y * goal_map.width + goal_x
-            
-            if goal_idx >= len(self.map_data.data):
-                self.get_logger().warn(f"Goal index out of range: {goal_idx}")
-                return False
-
-            # Check goal point and surrounding area
-            cell_value = self.map_data.data[goal_idx]
-            
-            # Typically, 0 means free, 100 means occupied, -1 means unknown
-            if cell_value == 100:  # Goal is on obstacle
-                self.get_logger().warn(f"Goal is in obstacle (cell value: {cell_value})")
-                return False
-            elif cell_value == -1:  # Goal is in unknown area
-                self.get_logger().info("Goal is in unknown area, assuming reachable")
-                return True
-            else:  # Goal is in free space
-                self.get_logger().info(f"Goal is in free space (cell value: {cell_value})")
-                return True
-                
-        except Exception as e:
-            self.get_logger().error(f"Error checking goal reachability: {str(e)}")
-            return True  # If error occurs, assume goal is reachable
+        return True
 
     def deactivate_robot(self):
         if not self.deactivate_client.wait_for_service(timeout_sec=1.0):
@@ -303,7 +350,7 @@ class SMStudentsNode(Node):
         self.publish_zero_velocity()
 
     def get_best_avoidance_direction(self):
-        """Determine the best direction to avoid obstacles based on lidar data"""
+        #Determine the best direction to avoid obstacles based on lidar data
         if self.scan_data is None:
             return 'right'  # Default to right if no data
         
@@ -343,21 +390,17 @@ class SMStudentsNode(Node):
         
         # If stuck in avoidance for too long, try recovery
         if avoidance_time > self.avoidance_duration:
-            self.get_logger().warn("Avoidance taking too long, entering recovery mode")
-            self.recovery_mode = True
-            self.recovery_start_time = time.time()
-            self.last_recovery_pose = self.current_pose
-            self.obstacle_avoidance_mode = False
-            return self.recovery_behavior()
+            self.get_logger().warn("Avoidance taking too long, goal might be unreachable")
+            return 'UNREACHABLE'
         
         # Execute avoidance based on chosen direction
         if self.last_obstacle_side == 'right':
             # Turn left and move slightly backward
-            velocity.linear.x = -0.1
+            velocity.linear.x = -0.2
             velocity.angular.z = 0.8
         else:
             # Turn right and move slightly backward
-            velocity.linear.x = -0.1
+            velocity.linear.x = -0.2
             velocity.angular.z = -0.8
             
         return velocity
@@ -375,10 +418,10 @@ class SMStudentsNode(Node):
         
         # If recovery takes too long, give up and request new goal
         if recovery_time > self.recovery_duration:
-            self.get_logger().warn("Recovery failed, requesting new goal")
+            self.get_logger().warn("Recovery failed, goal might be unreachable")
             self.recovery_mode = False
             self.publish_zero_velocity()
-            return 'FAILED'
+            return 'UNREACHABLE'
         
         # Check if we've moved significantly during recovery
         if self.last_recovery_pose and self.current_pose:
@@ -401,7 +444,7 @@ class SMStudentsNode(Node):
         elif recovery_time < 5.0:
             # Second phase: turn in place
             velocity.linear.x = 0.0
-            velocity.angular.z = 0.5
+            velocity.angular.z = 0.3
         else:
             # Third phase: move forward while turning
             velocity.linear.x = 0.2
@@ -419,16 +462,28 @@ class SMStudentsNode(Node):
         distance = np.sqrt(dx**2 + dy**2)
         
         # Check if goal is reached
-        if distance < 0.15:  # Goal tolerance
+        if distance < 0.05:  # Goal tolerance
             self.get_logger().info(f"Reached goal! Distance: {distance:.2f}")
             self.publish_zero_velocity()
             return 'REACHED'
+
+        # Check if goal is unreachable using laser scan when we're close
+        elif distance < 0.4:
+            # Use laser scan to check if goal is blocked by obstacle
+            if not self.is_goal_reachable(distance):
+                self.get_logger().warn("Goal is blocked by obstacle, requesting new goal")
+                return 'IN_OBSTACLE'
+            
+        # Check if we're making progress toward goal
+        if not self.check_progress_toward_goal():
+            self.get_logger().warn("Not making sufficient progress, goal might be unreachable")
+            return 'UNREACHABLE'
             
         # If in recovery mode, handle that first
         if self.recovery_mode:
             result = self.recovery_behavior()
-            if result == 'FAILED':
-                return 'FAILED'
+            if result == 'UNREACHABLE':
+                return 'UNREACHABLE'
             elif result == 'RECOVERED':
                 # Continue with normal navigation
                 pass
@@ -443,7 +498,11 @@ class SMStudentsNode(Node):
             
         # If in avoidance mode, execute avoidance behavior
         if self.obstacle_avoidance_mode:
-            return self.obstacle_avoidance_behavior()
+            result = self.obstacle_avoidance_behavior()
+            if result == 'UNREACHABLE':
+                return 'UNREACHABLE'
+            else:
+                return result
             
         # Normal navigation
         velocity = Twist()
@@ -469,9 +528,9 @@ class SMStudentsNode(Node):
                 min_front_distance = min(valid_ranges)
                 # Adjust speed based on front obstacle distance
                 if min_front_distance < 0.5:
-                    safe_speed = 0.1
-                elif min_front_distance < 1.0:
                     safe_speed = 0.2
+                elif min_front_distance < 1.0:
+                    safe_speed = 0.4
         
         # Set linear and angular velocity
         if abs(angular_error) < 0.2:  # Well aligned
@@ -503,7 +562,7 @@ class SMStudentsNode(Node):
             self.current_goal = goal
 
             # Reset states
-            self.get_logger().info("Moving to goal with improved obstacle avoidance.")
+            self.get_logger().info("Moving to goal. Will check if goal is valid after reaching it.")
             self.start_time = time.time()
             self.last_distance = None
             self.stuck_check_start_time = None
@@ -512,6 +571,7 @@ class SMStudentsNode(Node):
             self.obstacle_detected = False
             self.recovery_mode = False
             self.avoidance_direction_changes = 0
+            self.last_progress_time = None
             self.state = 'GOTO_GOAL'
 
         except Exception as e:
@@ -543,12 +603,18 @@ class SMStudentsNode(Node):
             result = self.navigate_to_goal()
             
             if result == 'REACHED':
-                # Goal reached, check validity
-                self.state = 'CHECK_GOAL_VALIDITY'
+                # Goal reached and validated, request next goal
+                self.get_logger().info('Goal reached successfully and is valid.')
+                self.state = 'GET_GOAL'  # Request next goal
                 return
-            elif result == 'FAILED':
-                # Navigation failed, request new goal
-                self.get_logger().warn("Navigation failed, requesting new goal")
+            elif result == 'IN_OBSTACLE':
+                # Goal is in obstacle, request new goal
+                self.get_logger().warn('Goal is blocked by obstacle. Requesting new goal.')
+                self.state = 'GET_GOAL'
+                return
+            elif result == 'UNREACHABLE':
+                # Goal is unreachable, request new goal
+                self.get_logger().warn("Goal is unreachable, requesting new goal")
                 self.publish_zero_velocity()
                 self.state = 'GET_GOAL'
                 return
@@ -574,15 +640,6 @@ class SMStudentsNode(Node):
                 self.publish_zero_velocity()
                 self.state = 'GET_GOAL'
                 return
-
-        elif self.state == 'CHECK_GOAL_VALIDITY':
-            # Check if the goal we reached is valid/reachable
-            if self.goal_reachable():
-                self.get_logger().info('Goal reached successfully and is valid.')
-                self.state = 'GET_GOAL'  # Request next goal
-            else:
-                self.get_logger().warn('Goal is in obstacle or unreachable. Requesting new goal.')
-                self.state = 'GET_GOAL'
 
 def main(args=None):
     rclpy.init(args=args)
