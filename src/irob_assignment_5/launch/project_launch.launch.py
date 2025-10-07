@@ -22,7 +22,7 @@ def generate_launch_description():
     pkg_share = get_package_share_directory('irob_assignment_5')
 
     # Path to the goal parameters YAML file
-    goal_params_file_path = os.path.join(pkg_share, 'config', 'goal_params_SM.yaml')
+    goal_params_file_path = os.path.join(pkg_share, 'config', 'goal_params_BT.yaml')
 
     # Goal Server Node with parameters
     goal_server_node = Node(
