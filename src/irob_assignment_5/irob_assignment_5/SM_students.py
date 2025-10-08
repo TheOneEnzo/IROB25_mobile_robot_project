@@ -56,11 +56,11 @@ class SMStudentsNode(Node):
         self.obstacle_avoidance_start_time = None
         
         # Navigation parameters - adjusted for better performance
-        self.safe_distance = 0.4  # Increased for large chassis
+        self.safe_distance = 0.3  # Increased for large chassis
         self.critical_distance = 0.2  # Increased for large chassis
         self.robot_radius = 0.1  # Increased robot radius estimate
         self.avoidance_duration = 20.0  # Increased avoidance time
-        self.avoidance_stuck_threshold = 8  # Increased threshold
+        self.avoidance_stuck_threshold = 12  # Increased threshold
         
         # Collision and stuck detection
         self.collision_count = 0
