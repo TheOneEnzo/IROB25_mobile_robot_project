@@ -365,7 +365,7 @@ class BTStudentsNode(Node):
         
         # If there's an obstacle closer than the goal, and we're close to the goal, it's unreachable
         if (min_obstacle_distance < distance_to_goal + 0.1 and  # Obstacle is closer than goal + small margin
-            distance_to_goal < 0.4):  # Only check when we're close to goal
+            distance_to_goal < 0.5):  # Only check when we're close to goal
             self.get_logger().warn(f"Goal unreachable: obstacle at {min_obstacle_distance:.2f}m, goal at {distance_to_goal:.2f}m")
             return False
             
@@ -595,12 +595,16 @@ class BTStudentsNode(Node):
             response = future.result()
 
             # Detect end of goal list
-            if response.goal_x == float('inf') or response.goal_y == float('inf'):
-                self.get_logger().info("No more goals. Deactivating robot.")
+            dx = response.goal_x - self.current_pose[0]
+            dy = response.goal_y - self.current_pose[1]
+            distance_to_goal = math.sqrt(dx**2 + dy**2)
+            
+            if distance_to_goal < 0.3:
+                self.get_logger().info("Goal is very close to current position. Deactivating robot.")
                 self.deactivate_robot()
                 self.state = 'INACTIVE'
                 return
-
+            
             goal = (response.goal_x, response.goal_y)
             self.get_logger().info(f'Goal received: {goal}')
             self.current_goal = goal
