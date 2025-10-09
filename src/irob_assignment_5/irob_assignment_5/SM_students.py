@@ -56,7 +56,7 @@ class SMStudentsNode(Node):
         self.obstacle_avoidance_start_time = None
         
         # Navigation parameters - adjusted for better performance
-        self.safe_distance = 0.3  # Increased for large chassis
+        self.safe_distance = 0.25  # Increased for large chassis
         self.critical_distance = 0.2  # Increased for large chassis
         self.robot_radius = 0.1  # Increased robot radius estimate
         self.avoidance_duration = 20.0  # Increased avoidance time
@@ -64,7 +64,7 @@ class SMStudentsNode(Node):
         
         # Collision and stuck detection
         self.collision_count = 0
-        self.max_collisions = 5  # Maximum collisions before giving up
+        self.max_collisions = 9  # Maximum collisions before giving up
         self.last_collision_time = None
         self.collision_cooldown = 2.0  # Time between collision counts
         
@@ -132,7 +132,7 @@ class SMStudentsNode(Node):
             angle_deg = math.degrees(angle)
             
             # Front obstacle detection (-70 to 70 degrees) - wider for better turn detection
-            if -70 <= angle_deg <= 70:
+            if -60 <= angle_deg <= 60:
                 if distance < front_min_distance:
                     front_min_distance = distance
                 if distance < self.safe_distance:
@@ -141,7 +141,7 @@ class SMStudentsNode(Node):
                     critical_obstacle = True
                     
             # Left obstacle detection (70 to 130 degrees)
-            if 70 <= angle_deg <= 130:
+            if 60 <= angle_deg <= 130:
                 if distance < left_min_distance:
                     left_min_distance = distance
                 if distance < self.safe_distance * 1.2:
@@ -150,7 +150,7 @@ class SMStudentsNode(Node):
                     side_obstacle_near = True
                     
             # Right obstacle detection (-130 to -70 degrees)
-            if -130 <= angle_deg <= -70:
+            if -130 <= angle_deg <= -60:
                 if distance < right_min_distance:
                     right_min_distance = distance
                 if distance < self.safe_distance * 1.2:
@@ -540,10 +540,10 @@ class SMStudentsNode(Node):
                 # When goal is behind and side obstacles are near, be more careful
                 if side_near and abs(best_direction) > math.radians(30):
                     # Move backward first to create space for turning
-                    velocity.linear.x = -0.1
+                    velocity.linear.x = -0.2
                     velocity.angular.z = np.clip(best_direction * 0.5, -0.4, 0.4)
                 elif closest_obstacle < self.critical_distance:
-                    velocity.linear.x = -0.15
+                    velocity.linear.x = -0.3
                     velocity.angular.z = np.clip(best_direction * 1.2, -1.0, 1.0)
                 else:
                     velocity.linear.x = 0.0
@@ -551,15 +551,15 @@ class SMStudentsNode(Node):
             else:
                 # Normal behavior for goals in front
                 if closest_obstacle < self.critical_distance:
-                    velocity.linear.x = -0.2
+                    velocity.linear.x = -0.3
                     velocity.angular.z = np.clip(best_direction * 1.5, -1.2, 1.2)
                 elif closest_obstacle < self.safe_distance:
                     # When turning with side obstacles near, reduce angular speed
                     if side_near and abs(best_direction) > math.radians(20):
-                        velocity.linear.x = 0.05
+                        velocity.linear.x = 0.1
                         velocity.angular.z = np.clip(best_direction * 0.8, -0.6, 0.6)
                     else:
-                        velocity.linear.x = 0.1
+                        velocity.linear.x = 0.2
                         velocity.angular.z = np.clip(best_direction * 1.2, -1.0, 1.0)
                 else:
                     velocity.linear.x = 0.2

@@ -1,9 +1,10 @@
 import rclpy
 from rclpy.node import Node
+import py_trees
 
-from irob_interfaces.srv import GetGoal, Activate, Deactivate, AtGoal
+from irob_interfaces.srv import GetGoal, Activate, Deactivate
 from geometry_msgs.msg import Twist
-from nav_msgs.msg import Odometry, OccupancyGrid
+from nav_msgs.msg import Odometry
 from sensor_msgs.msg import LaserScan
 from std_msgs.msg import Bool
 
@@ -12,15 +13,128 @@ import time
 import math
 
 
+class CheckActivation(py_trees.behaviour.Behaviour):
+    def __init__(self, name, node):
+        super().__init__(name)
+        self.node = node
+        
+    def update(self):
+        if self.node.active:
+            return py_trees.common.Status.SUCCESS
+        return py_trees.common.Status.FAILURE
+
+
+class GetGoalAction(py_trees.behaviour.Behaviour):
+    def __init__(self, name, node):
+        super().__init__(name)
+        self.node = node
+        self.goal_future = None
+        
+    def initialise(self):
+        self.node.get_logger().info("Requesting new goal...")
+        request = GetGoal.Request()
+        self.goal_future = self.node.goal_client.call_async(request)
+        
+    def update(self):
+        if self.goal_future is None:
+            return py_trees.common.Status.RUNNING
+            
+        if self.goal_future.done():
+            try:
+                response = self.goal_future.result()
+                
+                # Check for end of goals
+                if response.goal_x == float('inf') or response.goal_y == float('inf'):
+                    self.node.get_logger().info("No more goals")
+                    return py_trees.common.Status.FAILURE
+                
+                goal = (response.goal_x, response.goal_y)
+                self.node.current_goal = goal
+                self.node.get_logger().info(f'Goal received: {goal}')
+                
+                # Reset navigation state
+                self.node.start_time = time.time()
+                self.node.obstacle_avoidance_mode = False
+                self.node.recovery_mode = False
+                self.node.collision_count = 0
+                
+                return py_trees.common.Status.SUCCESS
+                
+            except Exception as e:
+                self.node.get_logger().error(f'Failed to get goal: {e}')
+                return py_trees.common.Status.FAILURE
+                
+        return py_trees.common.Status.RUNNING
+
+
+class CheckGoalReached(py_trees.behaviour.Behaviour):
+    def __init__(self, name, node):
+        super().__init__(name)
+        self.node = node
+        
+    def update(self):
+        if self.node.current_goal is None or self.node.current_pose is None:
+            return py_trees.common.Status.FAILURE
+            
+        dx = self.node.current_goal[0] - self.node.current_pose[0]
+        dy = self.node.current_goal[1] - self.node.current_pose[1]
+        distance = math.sqrt(dx**2 + dy**2)
+        
+        if distance < 0.05:
+            self.node.get_logger().info(f"Goal reached! Distance: {distance:.2f}")
+            self.node.publish_zero_velocity()
+            return py_trees.common.Status.SUCCESS
+            
+        return py_trees.common.Status.FAILURE
+
+
+class CheckObstacle(py_trees.behaviour.Behaviour):
+    def __init__(self, name, node):
+        super().__init__(name)
+        self.node = node
+        
+    def update(self):
+        if self.node.should_avoid_obstacle():
+            return py_trees.common.Status.SUCCESS
+        return py_trees.common.Status.FAILURE
+
+
+class AvoidObstacleAction(py_trees.behaviour.Behaviour):
+    def __init__(self, name, node):
+        super().__init__(name)
+        self.node = node
+        
+    def update(self):
+        velocity = self.node.execute_coordinate_based_avoidance()
+        self.node.cmd_vel_pub.publish(velocity)
+        return py_trees.common.Status.RUNNING
+
+
+class NavigateToGoalAction(py_trees.behaviour.Behaviour):
+    def __init__(self, name, node):
+        super().__init__(name)
+        self.node = node
+        
+    def update(self):
+        result = self.node.navigate_to_goal()
+        if isinstance(result, Twist):
+            self.node.cmd_vel_pub.publish(result)
+            return py_trees.common.Status.RUNNING
+        elif result == 'REACHED':
+            return py_trees.common.Status.SUCCESS
+        else:
+            # If navigation fails, return failure to get new goal
+            return py_trees.common.Status.FAILURE
+
+
 class BTStudentsNode(Node):
     def __init__(self):
-        super().__init__('SM_students_node')
+        super().__init__('bt_students_node')
 
         # Clients
         self.activate_client = self.create_client(Activate, 'activate')
         self.deactivate_client = self.create_client(Deactivate, 'deactivate')
         self.goal_client = self.create_client(GetGoal, 'get_goal')
-        self.at_goal_client = self.create_client(AtGoal, 'at_goal')
         
         # Publisher
         self.cmd_vel_pub = self.create_publisher(Twist, '/cmd_vel', 10)
@@ -29,13 +143,12 @@ class BTStudentsNode(Node):
         self.odom_sub = self.create_subscription(Odometry, '/odom', self.odom_callback, 10)
         self.scan_sub = self.create_subscription(LaserScan, '/scan', self.scan_callback, 10)
         self.active_sub = self.create_subscription(Bool, '/robot_active', self.active_callback, 10)
-        self.map_sub = self.create_subscription(OccupancyGrid, '/map', self.map_callback, 10)
 
         # Services
         self.activate_sm_srv = self.create_service(Activate, 'activate_sm', self.handle_activate_robot)
         self.deactivate_sm_srv = self.create_service(Deactivate, 'deactivate_sm', self.handle_deactivate_robot)
 
-        # Internal state
+        # Internal state - same as your state machine
         self.current_pose = None
         self.current_orientation = None        
         self.current_goal = None
@@ -44,49 +157,105 @@ class BTStudentsNode(Node):
         self.scan_data = None
         self.start_time = None 
         self.last_distance = None
-        self.map_data = None
         self.state = "INACTIVE"
-        self.stuck_check_start_time = None
-        self.stuck_check_initial_distance = None
-        self.last_velocity_publish_time = None
 
-        # NEW: Coordinate-based obstacle avoidance parameters
+        # Coordinate-based obstacle avoidance parameters
         self.obstacle_detected = False
         self.obstacle_avoidance_mode = False
         self.obstacle_avoidance_start_time = None
-        self.safe_distance = 0.5  # Safe distance from obstacles
-        self.avoidance_direction_changes = 0  # Track direction changes to prevent oscillation
-        self.detected_obstacles = []  # List of obstacles with coordinates
-        self.current_blocking_obstacle = None  # The obstacle currently blocking our path
-        self.obstacle_detection_range = 1.0  # meters
-        self.obstacle_avoidance_distance = 0.8  # meter
+        self.safe_distance = 0.5
+        self.avoidance_direction_changes = 0
+        self.detected_obstacles = []
+        self.current_blocking_obstacle = None
+        self.obstacle_detection_range = 1.0
+        self.obstacle_avoidance_distance = 0.8
+
         # Recovery behavior parameters
         self.recovery_mode = False
         self.recovery_start_time = None
-        self.recovery_duration = 8.0  # Maximum recovery time
-        self.last_recovery_pose = None  # Track position during recovery
+        self.recovery_duration = 8.0
+        self.last_recovery_pose = None
 
         # Goal unreachable detection
         self.goal_unreachable = False
         self.last_progress_time = None
-        self.min_progress_distance = 0.1  # Minimum progress in 10 seconds
-        self.progress_check_interval = 10.0  # Check progress every 10 seconds
+        self.min_progress_distance = 0.1
+        self.progress_check_interval = 10.0
 
         # For tracking async goal request
         self.goal_future = None
-        # For tracking async activation request
         self.activate_future = None
 
-        # Timer to drive state machine
-        self.timer = self.create_timer(0.1, self.state_machine_callback)
+        # Create Behavior Tree
+        self.create_behavior_tree()
+        
+        # Timer for BT ticking
+        self.timer = self.create_timer(0.1, self.tick_bt)
 
-        self.get_logger().info("SM_students_node ready. Robot is inactive until activated.")
+        self.get_logger().info("BT_students_node ready with Behavior Tree.")
 
-    # Callbacks
+    def create_behavior_tree(self):
+        """Create the main behavior tree"""
+        
+        # Main navigation sequence
+        navigation_sequence = py_trees.composites.Sequence("NavigationSequence", memory=True)
+        
+        # Get goal action
+        get_goal_behavior = GetGoalAction("GetGoal", self)
+        
+        # Navigation subtree - keeps running until goal is reached
+        navigation_subtree = py_trees.composites.Selector("NavigateToGoal", memory=True)
+        
+        # Check if goal is reached (if yes, success and we get new goal)
+        check_goal_reached = CheckGoalReached("CheckGoalReached", self)
+        
+        # Obstacle avoidance vs normal navigation
+        obstacle_navigation_selector = py_trees.composites.Selector("ObstacleNavigation", memory=True)
+        
+        # Obstacle avoidance sequence
+        obstacle_avoidance = py_trees.composites.Sequence("AvoidObstacle", memory=True)
+        obstacle_avoidance.add_children([
+            CheckObstacle("CheckObstacle", self),
+            AvoidObstacleAction("AvoidObstacleAction", self)
+        ])
+        
+        # Normal navigation
+        normal_navigation = NavigateToGoalAction("NavigateToGoal", self)
+        
+        # Build the tree hierarchy
+        obstacle_navigation_selector.add_children([obstacle_avoidance, normal_navigation])
+        navigation_subtree.add_children([check_goal_reached, obstacle_navigation_selector])
+        navigation_sequence.add_children([get_goal_behavior, navigation_subtree])
+        
+        # Root with activation check
+        root = py_trees.composites.Selector("Root", memory=True)
+        
+        # Check activation condition
+        check_activation = CheckActivation("CheckActivation", self)
+        
+        # Inactive behavior (do nothing)
+        inactive_behavior = py_trees.behaviours.Success("Inactive")
+        
+        # Build final tree
+        activation_sequence = py_trees.composites.Sequence("ActivationSequence", memory=True)
+        activation_sequence.add_children([check_activation, navigation_sequence])
+        
+        root.add_children([activation_sequence, inactive_behavior])
+        
+        self.behaviour_tree = py_trees.trees.BehaviourTree(root)
+        
+        # Display the tree structure
+        self.get_logger().info("Behavior Tree created:")
+        print(py_trees.display.unicode_tree(root))
+
+    def tick_bt(self):
+        """Tick the behavior tree"""
+        self.behaviour_tree.tick()
+
+    # Callbacks - same as your state machine
     def odom_callback(self, msg):
         self.current_pose = (msg.pose.pose.position.x, msg.pose.pose.position.y)
         self.current_orientation = msg.pose.pose.orientation
-        # Update current yaw when we get new odometry
         if self.current_orientation:
             q = self.current_orientation
             siny_cosp = 2 * (q.w * q.z + q.x * q.y)
@@ -98,13 +267,8 @@ class BTStudentsNode(Node):
 
     def scan_callback(self, msg):
         self.scan_data = msg
-        # Real-time obstacle detection using coordinate-based method
         self.detect_obstacles()
 
-    def map_callback(self, msg):
-        self.map_data = msg
-
-    # NEW: Coordinate-based obstacle detection methods
     def detect_obstacles(self):
         """Use lidar data to detect obstacles and calculate their world coordinates"""
         if self.scan_data is None or self.current_pose is None:
@@ -140,8 +304,8 @@ class BTStudentsNode(Node):
                     'x': obstacle_x,
                     'y': obstacle_y,
                     'distance': distance,
-                    'angle': scan_angle,  # Relative to robot front
-                    'world_angle': world_angle  # Relative to global frame
+                    'angle': scan_angle,
+                    'world_angle': world_angle
                 })
 
     def should_avoid_obstacle(self):
@@ -163,7 +327,7 @@ class BTStudentsNode(Node):
             
             # Check if obstacle is in the path to goal (within ±30 degrees)
             angle_diff = abs(goal_angle - obstacle_angle)
-            angle_diff = min(angle_diff, 2*math.pi - angle_diff)  # Handle wrap-around
+            angle_diff = min(angle_diff, 2*math.pi - angle_diff)
             
             if angle_diff < math.pi/6:  # 30 degrees
                 blocking_obstacles.append(obstacle)
@@ -181,7 +345,7 @@ class BTStudentsNode(Node):
         )
         
         # If the "obstacle" is very close to the goal coordinates, it's probably the goal itself
-        if obstacle_to_goal_distance < 0.3:  # 30cm threshold
+        if obstacle_to_goal_distance < 0.3:
             self.get_logger().info("Obstacle is likely the goal itself, proceeding")
             return False
         
@@ -195,7 +359,7 @@ class BTStudentsNode(Node):
     def calculate_avoidance_direction(self):
         """Calculate the best direction to avoid the blocking obstacle"""
         if self.current_blocking_obstacle is None:
-            return 0  # No avoidance needed
+            return 0
         
         # Calculate vectors
         robot_to_goal = [self.current_goal[0] - self.current_pose[0], 
@@ -207,12 +371,10 @@ class BTStudentsNode(Node):
         cross_product = (robot_to_goal[0] * robot_to_obstacle[1] - 
                         robot_to_goal[1] * robot_to_obstacle[0])
         
-        # Positive cross product means obstacle is to the left, so turn right
-        # Negative cross product means obstacle is to the right, so turn left
         if cross_product > 0:
-            return -1  # Turn right (clockwise)
+            return -1  # Turn right
         else:
-            return 1   # Turn left (counter-clockwise)
+            return 1   # Turn left
         
     def execute_coordinate_based_avoidance(self):
         """Execute obstacle avoidance using coordinate-based strategy"""
@@ -223,266 +385,15 @@ class BTStudentsNode(Node):
         
         avoidance_direction = self.calculate_avoidance_direction()
         
-        # For differential drive robots, use angular velocity to turn
-        # and limited forward motion
-        velocity.linear.x = 0.1  # Slow forward motion
-        velocity.angular.z = 0.3 * avoidance_direction  # Turn away from obstacle
+        velocity.linear.x = 0.1
+        velocity.angular.z = 0.3 * avoidance_direction
         
         self.get_logger().info(f"Avoiding obstacle: turning {'right' if avoidance_direction == -1 else 'left'}")
         
         return velocity
 
-    # Service Handlers
-    def handle_activate_robot(self, request, response):
-        self.get_logger().info("Activate SM service called!")
-
-        if self.current_pose is None:
-            self.get_logger().warn("Cannot activate state machine — no odometry received yet.")
-            response.success = False
-            response.message = "No odometry received yet."
-            return response
-
-        
-        if not self.activate_client.wait_for_service(timeout_sec=2.0):
-            self.get_logger().warn('activate service not available.')
-            response.success = False
-            response.message = "Activate service not available."
-            return response
-
-        self.get_logger().info("Calling activate service to activate robot...")
-        activate_request = Activate.Request()
-        self.activate_future = self.create_client(Activate, 'activate').call_async(activate_request)
-        self.activate_future.add_done_callback(self.activation_response_callback)
-
-        response.success = True
-        response.message = 'Activation request sent to robot.'
-        return response
-
-    def activation_response_callback(self, future):
-        
-        try:
-            response = future.result()
-            if response.success:
-                self.get_logger().info("Robot activated successfully via activation server")
-                self.state = 'GET_GOAL'
-                self.get_logger().info("State machine state set to GET_GOAL")
-            else:
-                self.get_logger().error(f"Failed to activate robot: {response.message}")
-        except Exception as e:
-            self.get_logger().error(f'Activation service call failed: {str(e)}')
-
-    def handle_deactivate_robot(self, request, response):
-        
-        if not self.deactivate_client.wait_for_service(timeout_sec=2.0):
-            self.get_logger().warn('deactivate service not available.')
-            response.success = False
-            response.message = "Deactivate service not available."
-            return response
-
-        self.get_logger().info("Calling deactivate service to deactivate robot...")
-        deactivate_request = Deactivate.Request()
-        deactivate_future = self.deactivate_client.call_async(deactivate_request)
-        
-        
-        start_time = time.time()
-        while not deactivate_future.done():
-            if time.time() - start_time > 5.0:  
-                self.get_logger().warn("Deactivate service call timeout")
-                break
-            rclpy.spin_once(self, timeout_sec=0.1)
-
-        if deactivate_future.done():
-            try:
-                deactivate_response = deactivate_future.result()
-                if deactivate_response.success:
-                    self.get_logger().info(f"Robot deactivated: {deactivate_response.message}")
-                else:
-                    self.get_logger().error(f"Failed to deactivate robot: {deactivate_response.message}")
-            except Exception as e:
-                self.get_logger().error(f"Exception in deactivate service: {str(e)}")
-
-        self.publish_zero_velocity()
-        self.state = 'INACTIVE'
-        
-        response.success = True
-        response.message = 'State machine deactivated.'
-        return response
-
-    def publish_zero_velocity(self):
-        velocity = Twist()
-        velocity.linear.x = 0.0
-        velocity.angular.z = 0.0
-        self.cmd_vel_pub.publish(velocity)
-        self.get_logger().debug("Published zero velocity")
-        
-    def is_goal_reachable(self, distance_to_goal):
-        """Check if goal is reachable using laser scan data"""
-        if self.scan_data is None or self.current_goal is None or self.current_pose is None:
-            return True  # Can't check, assume reachable
-            
-        # Calculate the angle to the goal
-        dx = self.current_goal[0] - self.current_pose[0]
-        dy = self.current_goal[1] - self.current_pose[1]
-        goal_angle = math.atan2(dy, dx)
-        
-        # Get robot's current orientation
-        q = self.current_orientation
-        siny_cosp = 2 * (q.w * q.z + q.x * q.y)
-        cosy_cosp = 1 - 2 * (q.y**2 + q.z**2)
-        robot_yaw = math.atan2(siny_cosp, cosy_cosp)
-        
-        # Calculate relative angle to goal in robot's frame
-        relative_angle = goal_angle - robot_yaw
-        relative_angle = (relative_angle + math.pi) % (2 * math.pi) - math.pi  # Normalize to [-pi, pi]
-        
-        # Convert to degrees
-        relative_angle_deg = math.degrees(relative_angle)
-        
-        # Get laser scan parameters
-        angle_min = math.degrees(self.scan_data.angle_min)
-        angle_max = math.degrees(self.scan_data.angle_max)
-        angle_increment = math.degrees(self.scan_data.angle_increment)
-        
-        # Calculate laser scan index for the goal direction
-        goal_index = int((relative_angle_deg - angle_min) / angle_increment)
-        
-        # Check if goal index is within valid range
-        if goal_index < 0 or goal_index >= len(self.scan_data.ranges):
-            return True  # Goal outside laser scan range, assume reachable
-        
-        # Get distance to obstacle in goal direction
-        obstacle_distance = self.scan_data.ranges[goal_index]
-        
-        # Also check a small cone around the goal direction
-        cone_width = 5  # degrees
-        cone_indices = int(cone_width / angle_increment)
-        
-        min_obstacle_distance = float('inf')
-        for i in range(max(0, goal_index - cone_indices), min(len(self.scan_data.ranges), goal_index + cone_indices + 1)):
-            dist = self.scan_data.ranges[i]
-            if not (math.isinf(dist) or math.isnan(dist)):
-                min_obstacle_distance = min(min_obstacle_distance, dist)
-        
-        # If there's an obstacle closer than the goal, and we're close to the goal, it's unreachable
-        if (min_obstacle_distance < distance_to_goal + 0.1 and  # Obstacle is closer than goal + small margin
-            distance_to_goal < 0.4):  # Only check when we're close to goal
-            self.get_logger().warn(f"Goal unreachable: obstacle at {min_obstacle_distance:.2f}m, goal at {distance_to_goal:.2f}m")
-            return False
-            
-        return True
-
-    def check_progress_toward_goal(self):
-        #Check stuck
-        if self.current_goal is None or self.current_pose is None:
-            return True  # Can't check progress, assume we're making progress
-            
-        # Calculate current distance to goal
-        dx = self.current_goal[0] - self.current_pose[0]
-        dy = self.current_goal[1] - self.current_pose[1]
-        current_distance = math.sqrt(dx**2 + dy**2)
-        
-        # Initialize progress tracking
-        if self.last_progress_time is None:
-            self.last_progress_time = time.time()
-            self.last_distance = current_distance
-            return True
-            
-        # Check if enough time has passed to evaluate progress
-        if time.time() - self.last_progress_time < self.progress_check_interval:
-            return True
-            
-        # Check if we've made sufficient progress
-        progress = self.last_distance - current_distance
-        self.get_logger().info(f"Progress check: moved {progress:.2f}m in {self.progress_check_interval}s")
-        
-        # Reset progress tracking
-        self.last_progress_time = time.time()
-        self.last_distance = current_distance
-        
-        # If we haven't made sufficient progress, goal might be unreachable
-        if progress < self.min_progress_distance:
-            self.get_logger().warn(f"Insufficient progress ({progress:.2f}m), goal might be unreachable")
-            return False
-            
-        return True
-
-    def deactivate_robot(self):
-        if not self.deactivate_client.wait_for_service(timeout_sec=1.0):
-            self.get_logger().warn('deactivate service not available.')
-            return
-
-        deactivate_request = Deactivate.Request()
-        deactivate_future = self.deactivate_client.call_async(deactivate_request)
-        
-        
-        start_time = time.time()
-        while not deactivate_future.done():
-            if time.time() - start_time > 5.0: 
-                self.get_logger().warn("Deactivate service call timeout")
-                break
-            rclpy.spin_once(self, timeout_sec=0.1)
-
-        if deactivate_future.done():
-            try:
-                response = deactivate_future.result()
-                if response.success:
-                    self.get_logger().info(f"Robot deactivated: {response.message}")
-                else:
-                    self.get_logger().error(f"Failed to deactivate robot: {response.message}")
-            except Exception as e:
-                self.get_logger().error(f"Exception in deactivate service: {str(e)}")
-
-        self.publish_zero_velocity()
-
-    def recovery_behavior(self):
-        """Recovery behavior when robot is stuck between obstacles"""
-        velocity = Twist()
-        
-        if self.recovery_start_time is None:
-            self.recovery_start_time = time.time()
-            self.last_recovery_pose = self.current_pose
-            self.get_logger().info("Starting recovery behavior")
-        
-        recovery_time = time.time() - self.recovery_start_time
-        
-        # If recovery takes too long, give up and request new goal
-        if recovery_time > self.recovery_duration:
-            self.get_logger().warn("Recovery failed, goal might be unreachable")
-            self.recovery_mode = False
-            self.publish_zero_velocity()
-            return 'UNREACHABLE'
-        
-        # Check if we've moved significantly during recovery
-        if self.last_recovery_pose and self.current_pose:
-            dx = self.current_pose[0] - self.last_recovery_pose[0]
-            dy = self.current_pose[1] - self.last_recovery_pose[1]
-            distance_moved = math.sqrt(dx**2 + dy**2)
-            
-            # If we've moved enough, try to resume navigation
-            if distance_moved > 0.5 and recovery_time > 3.0:
-                self.get_logger().info("Recovery successful, resuming navigation")
-                self.recovery_mode = False
-                self.obstacle_avoidance_mode = False
-                return 'RECOVERED'
-        
-        # Execute recovery: move backward and turn
-        if recovery_time < 2.0:
-            # First phase: move straight back
-            velocity.linear.x = -0.3
-            velocity.angular.z = 0.0
-        elif recovery_time < 5.0:
-            # Second phase: turn in place
-            velocity.linear.x = 0.0
-            velocity.angular.z = 0.3
-        else:
-            # Third phase: move forward while turning
-            velocity.linear.x = 0.2
-            velocity.angular.z = 0.3
-            
-        return velocity
-
     def navigate_to_goal(self):
-        """Improved navigation function with coordinate-based obstacle handling"""
+        """Navigation function with coordinate-based obstacle handling"""
         if self.current_goal is None or self.current_pose is None:
             return None
             
@@ -491,63 +402,11 @@ class BTStudentsNode(Node):
         distance = np.sqrt(dx**2 + dy**2)
         
         # Check if goal is reached
-        if distance < 0.05:  # Goal tolerance
+        if distance < 0.05:
             self.get_logger().info(f"Reached goal! Distance: {distance:.2f}")
             self.publish_zero_velocity()
             return 'REACHED'
 
-        # Check if goal is unreachable using laser scan when we're close
-        elif distance < 0.4:
-            # Use laser scan to check if goal is blocked by obstacle
-            if not self.is_goal_reachable(distance):
-                self.get_logger().warn("Goal is blocked by obstacle, requesting new goal")
-                return 'IN_OBSTACLE'
-            
-        # Check if we're making progress toward goal
-        if not self.check_progress_toward_goal():
-            self.get_logger().warn("Not making sufficient progress, goal might be unreachable")
-            return 'UNREACHABLE'
-            
-        # If in recovery mode, handle that first
-        if self.recovery_mode:
-            result = self.recovery_behavior()
-            if result == 'UNREACHABLE':
-                return 'UNREACHABLE'
-            elif result == 'RECOVERED':
-                # Continue with normal navigation
-                pass
-            else:
-                return result
-            
-        # FIXED: Use the coordinate-based obstacle detection
-        avoid_obstacle = self.should_avoid_obstacle()
-        
-        if avoid_obstacle and not self.obstacle_avoidance_mode:
-            self.get_logger().warn("Obstacle detected in path! Starting coordinate-based avoidance")
-            self.obstacle_avoidance_mode = True
-            self.obstacle_avoidance_start_time = time.time()
-            
-        # If in avoidance mode, let the state machine handle coordinate-based avoidance
-        # We'll return to normal navigation here, and the state machine will handle avoidance
-        if self.obstacle_avoidance_mode:
-            # Check if we should exit avoidance mode
-            if not avoid_obstacle:
-                if (self.obstacle_avoidance_start_time is not None and 
-                    time.time() - self.obstacle_avoidance_start_time > 2.0):
-                    self.get_logger().info("Path cleared, returning to normal navigation")
-                    self.obstacle_avoidance_mode = False
-                    self.avoidance_direction_changes = 0
-            else:
-                # Continue avoidance - but let state machine handle this
-                if self.obstacle_avoidance_start_time is not None:
-                    avoidance_time = time.time() - self.obstacle_avoidance_start_time
-                    if avoidance_time > 15.0:  # Avoidance timeout
-                        self.get_logger().warn("Avoidance taking too long, goal might be unreachable")
-                        return 'UNREACHABLE'
-                
-                # Return normal navigation - the state machine will override with avoidance
-                pass
-            
         # Normal navigation
         velocity = Twist()
         
@@ -562,169 +421,65 @@ class BTStudentsNode(Node):
         angular_error = (angular_error + np.pi) % (2 * np.pi) - np.pi
 
         # Adjust speed based on lidar data
-        safe_speed = 0.3  # Default safe speed
+        safe_speed = 0.3
         
         if self.scan_data:
-            # Check minimum distance in front area
             front_ranges = self.scan_data.ranges[len(self.scan_data.ranges)//3:2*len(self.scan_data.ranges)//3]
             valid_ranges = [r for r in front_ranges if not (math.isinf(r) or math.isnan(r))]
             if valid_ranges:
                 min_front_distance = min(valid_ranges)
-                # Adjust speed based on front obstacle distance
                 if min_front_distance < 0.5:
                     safe_speed = 0.2
                 elif min_front_distance < 1.0:
                     safe_speed = 0.4
         
         # Set linear and angular velocity
-        if abs(angular_error) < 0.2:  # Well aligned
+        if abs(angular_error) < 0.2:
             velocity.linear.x = min(safe_speed, distance * 0.5)
-        elif abs(angular_error) < 0.5:  # Moderately aligned
+        elif abs(angular_error) < 0.5:
             velocity.linear.x = min(safe_speed * 0.7, distance * 0.3)
-        else:  # Need significant turning
+        else:
             velocity.linear.x = 0.0
             
-        # Angular velocity control with smoothing
         velocity.angular.z = np.clip(angular_error * 1.5, -0.8, 0.8)
         
         return velocity
 
-    # Async callback for get_goal response
-    def goal_response_callback(self, future):
-        try:
-            response = future.result()
+    def publish_zero_velocity(self):
+        velocity = Twist()
+        velocity.linear.x = 0.0
+        velocity.angular.z = 0.0
+        self.cmd_vel_pub.publish(velocity)
 
-            # Detect end of goal list
-            if response.goal_x == float('inf') or response.goal_y == float('inf'):
-                self.get_logger().info("No more goals. Deactivating robot.")
-                self.deactivate_robot()
-                self.state = 'INACTIVE'
-                return
+    # Service Handlers
+    def handle_activate_robot(self, request, response):
+        self.get_logger().info("Activate BT service called!")
+        self.active = True
+        response.success = True
+        response.message = 'Behavior Tree activated.'
+        return response
 
-            goal = (response.goal_x, response.goal_y)
-            self.get_logger().info(f'Goal received: {goal}')
-            self.current_goal = goal
+    def handle_deactivate_robot(self, request, response):
+        self.get_logger().info("Deactivate BT service called!")
+        self.active = False
+        self.publish_zero_velocity()
+        response.success = True
+        response.message = 'Behavior Tree deactivated.'
+        return response
 
-            # Reset states
-            self.get_logger().info("Moving to goal. Will check if goal is valid after reaching it.")
-            self.start_time = time.time()
-            self.last_distance = None
-            self.stuck_check_start_time = None
-            self.stuck_check_initial_distance = None
-            self.obstacle_avoidance_mode = False
-            self.obstacle_detected = False
-            self.recovery_mode = False
-            self.avoidance_direction_changes = 0
-            self.last_progress_time = None
-            self.detected_obstacles = []  # Clear previous obstacles
-            self.state = 'GOTO_GOAL'
-
-        except Exception as e:
-            self.get_logger().error(f'Failed to get goal: {e}')
-            self.state = 'GET_GOAL'
-
-    def state_machine_callback(self):
-        if self.state == 'INACTIVE':
-            return
-
-        if self.state == 'GET_GOAL':
-            if not self.goal_client.wait_for_service(timeout_sec=1.0):
-                self.get_logger().warn('get_goal service not available.')
-                return
-
-            # If we don't have a pending request, send one
-            if self.goal_future is None or self.goal_future.done():
-                self.get_logger().info("Calling get_goal service asynchronously...")
-                request = GetGoal.Request()
-                self.goal_future = self.goal_client.call_async(request)
-                self.goal_future.add_done_callback(self.goal_response_callback)
-
-        elif self.state == 'GOTO_GOAL':
-            if self.current_goal is None or self.current_pose is None:
-                self.get_logger().warn("Cannot navigate - missing goal or pose")
-                return
-
-            # Calculate current yaw from orientation (needed for coordinate-based avoidance)
-            q = self.current_orientation
-            siny_cosp = 2 * (q.w * q.z + q.x * q.y)
-            cosy_cosp = 1 - 2 * (q.y**2 + q.z**2)
-            self.current_yaw = np.arctan2(siny_cosp, cosy_cosp)
-
-            # Detect obstacles and their world coordinates
-            self.detect_obstacles()
-            
-            # Check if we need to avoid obstacles using coordinate-based approach
-            if self.should_avoid_obstacle():
-                # Use coordinate-based obstacle avoidance
-                velocity = self.execute_coordinate_based_avoidance()
-                avoidance_status = "COORD_AVOIDANCE"
-            else:
-                # Use normal navigation (your existing navigate_to_goal function)
-                result = self.navigate_to_goal()
-                
-                if result == 'REACHED':
-                    # Goal reached and validated, request next goal
-                    self.get_logger().info('Goal reached successfully and is valid.')
-                    self.state = 'GET_GOAL'  # Request next goal
-                    return
-                elif result == 'IN_OBSTACLE':
-                    # Goal is in obstacle, request new goal
-                    self.get_logger().warn('Goal is blocked by obstacle. Requesting new goal.')
-                    self.state = 'GET_GOAL'
-                    return
-                elif result == 'UNREACHABLE':
-                    # Goal is unreachable, request new goal
-                    self.get_logger().warn("Goal is unreachable, requesting new goal")
-                    self.publish_zero_velocity()
-                    self.state = 'GET_GOAL'
-                    return
-                elif isinstance(result, Twist):
-                    velocity = result
-                    avoidance_status = "NORMAL"
-                else:
-                    # Fallback to zero velocity if something unexpected happens
-                    velocity = Twist()
-                    avoidance_status = "STOPPED"
-
-            # Publish the velocity command
-            self.cmd_vel_pub.publish(velocity)
-            
-            # Log navigation info
-            dx = self.current_goal[0] - self.current_pose[0]
-            dy = self.current_goal[1] - self.current_pose[1]
-            distance = np.sqrt(dx**2 + dy**2)
-            
-            if avoidance_status == "COORD_AVOIDANCE":
-                if self.current_blocking_obstacle:
-                    self.get_logger().info(f"COORD_AVOID: lin_x={velocity.linear.x:.2f}, ang_z={velocity.angular.z:.2f}, "
-                                        f"dist={distance:.2f}, obs=({self.current_blocking_obstacle['x']:.2f}, "
-                                        f"{self.current_blocking_obstacle['y']:.2f})")
-                else:
-                    self.get_logger().info(f"COORD_AVOID: lin_x={velocity.linear.x:.2f}, ang_z={velocity.angular.z:.2f}, dist={distance:.2f}")
-            elif avoidance_status == "NORMAL":
-                if self.recovery_mode:
-                    self.get_logger().info(f"RECOVERY: lin_x={velocity.linear.x:.2f}, ang_z={velocity.angular.z:.2f}, dist={distance:.2f}")
-                elif self.obstacle_avoidance_mode:
-                    self.get_logger().info(f"AVOIDING: lin_x={velocity.linear.x:.2f}, ang_z={velocity.angular.z:.2f}, dist={distance:.2f}")
-                else:
-                    self.get_logger().info(f"NAVIGATING: lin_x={velocity.linear.x:.2f}, ang_z={velocity.angular.z:.2f}, dist={distance:.2f}")
-            else:
-                self.get_logger().info(f"STOPPED: dist={distance:.2f}")
-
-            # Check timeout
-            if time.time() - self.start_time > 120:  # 2 minute timeout
-                self.get_logger().warn('Timeout while trying to reach goal.')
-                self.publish_zero_velocity()
-                self.state = 'GET_GOAL'
-                return
 
 def main(args=None):
     rclpy.init(args=args)
     node = BTStudentsNode()
-    rclpy.spin(node)
+    
+    try:
+        rclpy.spin(node)
+    except KeyboardInterrupt:
+        pass
+    finally:
+        node.destroy_node()
+        rclpy.shutdown()
 
-    node.destroy_node()
-    rclpy.shutdown()
 
 if __name__ == '__main__':
     main()

@@ -36,6 +36,8 @@
 
   <build_depend>builtin_interfaces</build_depend>
 
+  <exec_depend>python3-py-trees</exec_depend>
+
   <!-- #adds both build and exec depends-->
   <depend>irob_interfaces</depend> 
   

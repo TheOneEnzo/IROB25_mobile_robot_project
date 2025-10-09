@@ -49,7 +49,7 @@ def generate_launch_description():
         output='screen'
     )
 
-    # Your State Machine Node
+    #State Machine Node
     sm_students_node = Node(
         package='irob_assignment_5',
         executable='SM_students',
@@ -57,10 +57,20 @@ def generate_launch_description():
         output='screen'
     )
 
+    #Behavior Tree node
+    bt_students_node = Node(
+            package='irob_assignment_5',
+            executable='BT_students',
+            name='BT_students_node',
+            output='screen'
+        )
+    
+
     return LaunchDescription([
         goal_server_node,
         activation_server_node,
         at_goal_server_node,
-        sm_students_node
+        sm_students_node,
+        bt_students_node
     ])
 
