@@ -3,7 +3,7 @@ from rclpy.node import Node
 import py_trees
 
 from irob_interfaces.srv import GetGoal, Activate, Deactivate
-from geometry_msgs.msg import Twist
+from geometry_msgs.msg import Twist, PointStamped
 from nav_msgs.msg import Odometry
 from sensor_msgs.msg import LaserScan
 from std_msgs.msg import Bool
@@ -78,6 +78,13 @@ class NavigateToGoal(py_trees.behaviour.Behaviour):
         self.node = node
         
     def update(self):
+        # Check if new goal was detected from goal_point topic
+        if self.node.new_goal_detected:
+            self.node.get_logger().info("New goal detected from goal_point topic - switching to new goal!")
+            self.node.publish_zero_velocity()
+            self.node.new_goal_detected = False
+            return py_trees.common.Status.FAILURE  # This will make BT go back to GetNewGoal
+            
         if self.node.current_goal is None:
             self.node.get_logger().info("No goal available for navigation")
             return py_trees.common.Status.FAILURE
@@ -92,20 +99,17 @@ class NavigateToGoal(py_trees.behaviour.Behaviour):
         distance = math.sqrt(dx**2 + dy**2)
         
         # Check if goal is reached (using 0.2m threshold as requested)
-        if distance <= 0.1:
-            #self.node.get_logger().info(f"Goal reached! Distance: {distance:.2f}")
-            #self.node.publish_zero_velocity()
+        if distance <= 0.05:
             self.node.get_logger().info("Final goal reached - deactivating robot")
             self.node.deactivate_robot()
             
             # If this was the last goal, deactivate the robot
+            
             if distance < 0.2:
                 self.node.get_logger().info(f"Goal reached! Distance: {distance:.2f}")
                 self.node.publish_zero_velocity()
-                #self.node.get_logger().info("Final goal reached - deactivating robot")
-                #self.node.deactivate_robot()
-            
                 self.node.current_goal = None
+            
             return py_trees.common.Status.SUCCESS
         
         # Use the improved navigation
@@ -131,7 +135,8 @@ class GetNewGoal(py_trees.behaviour.Behaviour):
         self.future = None
         
     def update(self):
-        if self.node.current_goal is not None:
+        # If we already have a goal (possibly from goal_point topic) and no new goal detected, keep it
+        if self.node.current_goal is not None and not self.node.new_goal_detected:
             return py_trees.common.Status.SUCCESS
             
         if not self.goal_requested:
@@ -222,7 +227,6 @@ class CheckFinalGoalReached(py_trees.behaviour.Behaviour):
         
     def update(self):
         # Check if we received the last goal and don't have a current goal
-        # This means we successfully reached the final goal
         if self.node.last_goal_received and self.node.current_goal is None:
             self.node.get_logger().info("Final goal reached - should deactivate")
             return py_trees.common.Status.SUCCESS
@@ -245,6 +249,9 @@ class BTStudentsNode(Node):
         self.odom_sub = self.create_subscription(Odometry, '/odom', self.odom_callback, 10)
         self.scan_sub = self.create_subscription(LaserScan, '/scan', self.scan_callback, 10)
         self.active_sub = self.create_subscription(Bool, '/robot_active', self.active_callback, 10)
+        
+        #Subscribe to goal_point topic to detect new goals
+        self.goal_point_sub = self.create_subscription(PointStamped, 'goal_point', self.goal_point_callback, 10)
 
         # Internal state
         self.current_pose = None
@@ -254,6 +261,11 @@ class BTStudentsNode(Node):
         self.active = False
         self.scan_data = None
         self.last_goal_received = False  # Track if we received the final goal
+        
+        # Track goal changes from goal_point topic
+        self.new_goal_detected = False
+        self.last_goal_from_topic = None
+        self.goal_change_threshold = 0.01  # Minimum change to consider it a new goal
 
         # Coordinate-based obstacle avoidance parameters
         self.obstacle_detected = False
@@ -274,6 +286,29 @@ class BTStudentsNode(Node):
 
         self.get_logger().info("BT Students Node with Obstacle Avoidance ready!")
         self.get_logger().info("Waiting for activation from activation server...")
+        self.get_logger().info("Will react to new goals published on /goal_point topic")
+
+    # Callback for goal_point topic
+    def goal_point_callback(self, msg):
+        new_goal = (msg.point.x, msg.point.y)
+        
+        # Check if this is a new goal (different from current goal)
+        if self.current_goal is None:
+            # First goal received
+            self.current_goal = new_goal
+            self.last_goal_from_topic = new_goal
+            self.get_logger().info(f"Initial goal received from goal_point: {new_goal}")
+        else:
+            # Check if goal has changed significantly
+            dx = new_goal[0] - self.current_goal[0]
+            dy = new_goal[1] - self.current_goal[1]
+            distance = math.sqrt(dx**2 + dy**2)
+            
+            if distance > self.goal_change_threshold:
+                self.get_logger().info(f"New goal detected from goal_point topic: {new_goal} (was {self.current_goal})")
+                self.current_goal = new_goal
+                self.new_goal_detected = True
+                self.last_goal_from_topic = new_goal
 
     def create_behavior_tree(self):
         """Create behavior tree that properly separates obstacle avoidance from goal-as-obstacle detection"""
@@ -346,21 +381,18 @@ class BTStudentsNode(Node):
         print(py_trees.display.unicode_tree(root))
 
     def tick_bt(self):
-        """Tick the behavior tree"""
         if hasattr(self, 'behaviour_tree'):
             self.behaviour_tree.tick()
 
     def deactivate_robot(self):
-        """Helper method to deactivate the robot"""
         if self.deactivate_client.wait_for_service(timeout_sec=1.0):
             request = Deactivate.Request()
             future = self.deactivate_client.call_async(request)
-            # Note: We don't wait for result here as it's handled in the behavior
+            # We don't wait for result here as it's handled in the behavior
         else:
             self.get_logger().warn("Deactivate service not available")
 
     def is_goal_itself_obstacle(self):
-        """Check if the goal itself is detected as an obstacle (only when close to goal)"""
         if self.current_goal is None or not self.detected_obstacles:
             return False
         
@@ -388,7 +420,6 @@ class BTStudentsNode(Node):
         return False
 
     def should_avoid_obstacle(self):
-        """Check if we need to avoid regular obstacles"""
         if self.current_goal is None or not self.detected_obstacles:
             return False
         
@@ -461,7 +492,6 @@ class BTStudentsNode(Node):
         self.detect_obstacles()
 
     def detect_obstacles(self):
-        """Use lidar data to detect obstacles and calculate their world coordinates"""
         if self.scan_data is None or self.current_pose is None:
             return
         
@@ -494,7 +524,6 @@ class BTStudentsNode(Node):
                 })
 
     def calculate_avoidance_direction(self):
-        """Calculate the best direction to avoid the blocking obstacle"""
         if self.current_blocking_obstacle is None:
             return 0
         
