@@ -79,10 +79,24 @@ class NavigateToGoal(py_trees.behaviour.Behaviour):
         # Check if new goal was detected from goal_point topic
         if self.node.new_goal_detected:
             self.node.get_logger().info("New goal detected from goal_point topic - switching to new goal!")
+            self.obstacle_detected = False
+            self.obstacle_avoidance_mode = False
+            self.obstacle_avoidance_start_time = None
+            self.safe_distance = 0.2
+            self.avoidance_direction_changes = 0
+            self.detected_obstacles = []
+            self.current_blocking_obstacle = None
+            self.obstacle_detection_range = 0.6
+            self.obstacle_avoidance_distance = 0.3
             self.node.publish_zero_velocity()
             self.node.new_goal_detected = False
             return py_trees.common.Status.FAILURE
-            
+        
+        if self.node.new_goal_detected:
+            self.node.get_logger().info("New goal detected from goal_point topic - switching to new goal!")
+            # Reset the flag but DON'T return FAILURE
+            self.node.new_goal_detected = False
+
         if self.node.current_goal is None:
             self.node.get_logger().info("No goal available for navigation")
             return py_trees.common.Status.FAILURE
@@ -125,15 +139,17 @@ class GetNewGoal(py_trees.behaviour.Behaviour):
         self.future = None
         
     def update(self):
-        # If we already have a goal (from topic or previous call), keep it
+        # If we already have a goal and no new goal is detected, we're good
         if self.node.current_goal is not None and not self.node.new_goal_detected:
             return py_trees.common.Status.SUCCESS
             
-        # NEW: Don't call service if we're expecting a goal from the topic
-        if self.node.expecting_topic_goal:
-            self.node.get_logger().info("Waiting for goal from topic, skipping service call")
-            return py_trees.common.Status.RUNNING
+        # If we have a new goal detected from topic, let NavigateToGoal handle it
+        # We return SUCCESS here so the behavior tree continues to navigation
+        if self.node.new_goal_detected:
+            self.node.get_logger().info("New goal from topic detected - proceeding to navigation")
+            return py_trees.common.Status.SUCCESS
             
+        # Only request from service if we have no goal and no new goal detected
         if not self.goal_requested:
             if not self.node.goal_client.wait_for_service(timeout_sec=1.0):
                 self.node.get_logger().warn("Goal service not available")
@@ -155,6 +171,7 @@ class GetNewGoal(py_trees.behaviour.Behaviour):
                     return py_trees.common.Status.SUCCESS
                 else:
                     self.node.get_logger().info("No more goals available")
+                    self.node.last_goal_received = True
                     self.goal_requested = False
                     return py_trees.common.Status.FAILURE
             except Exception as e:
@@ -163,7 +180,6 @@ class GetNewGoal(py_trees.behaviour.Behaviour):
                 return py_trees.common.Status.FAILURE
         
         return py_trees.common.Status.RUNNING
-
 
 class HandleGoalAsObstacle(py_trees.behaviour.Behaviour):
     def __init__(self, name, node):
@@ -256,13 +272,13 @@ class BTStudentsNode(Node):
         self.scan_data = None
         self.last_goal_received = False
         
-        # NEW: Improved goal tracking
+        # Improved goal tracking
         self.new_goal_detected = False
         self.last_goal_from_topic = None
         self.goal_change_threshold = 0.01
-        self.expecting_topic_goal = False  # NEW: Track when we're waiting for topic goal
-        self.last_external_service_time = 0  # NEW: Track external service calls
-        self.external_service_cooldown = 2.0  # NEW: Cooldown period
+        self.expecting_topic_goal = False  # Track when we're waiting for topic goal
+        self.last_external_service_time = 0  # Track external service calls
+        self.external_service_cooldown = 2.0  # Cooldown period
 
         # Coordinate-based obstacle avoidance parameters
         self.obstacle_detected = False
@@ -285,40 +301,22 @@ class BTStudentsNode(Node):
         self.get_logger().info("Will properly handle external service calls without skipping goals")
 
     def goal_point_callback(self, msg):
-        """Monitor goal_point topic for new goals from goal service"""
         new_goal = (msg.point.x, msg.point.y)
-        current_time = time.time()
         
-        # Check if this is a new goal (different from current goal)
-        if self.current_goal is None:
-            # First goal received
+        # If this is the first goal or the goal has actually changed
+        if self.current_goal is None or self.current_goal != new_goal:
+            old_goal = self.current_goal
             self.current_goal = new_goal
-            self.last_goal_from_topic = new_goal
-            self.get_logger().info(f"Initial goal received from goal_point: {new_goal}")
-            self.expecting_topic_goal = False
-        else:
-            # Check if goal has changed significantly
-            dx = new_goal[0] - self.current_goal[0]
-            dy = new_goal[1] - self.current_goal[1]
-            distance = math.sqrt(dx**2 + dy**2)
+            self.new_goal_detected = True
+            self.expecting_topic_goal = False  # We got the goal, no longer expecting
             
-            if distance > self.goal_change_threshold:
-                # Check if this change happened shortly after an external service call
-                time_since_external = current_time - self.last_external_service_time
-                
-                if time_since_external < self.external_service_cooldown:
-                    # This is likely from an external service call - use it directly
-                    self.get_logger().info(f"External service goal detected: {new_goal}")
-                    self.current_goal = new_goal
-                    self.new_goal_detected = True
-                    self.expecting_topic_goal = False
-                else:
-                    # This might be from our own service call or timer - be careful
-                    self.get_logger().info(f"Goal change detected: {new_goal} (was {self.current_goal})")
-                    self.current_goal = new_goal
-                    self.new_goal_detected = True
-                
-                self.last_goal_from_topic = new_goal
+            if old_goal is None:
+                self.get_logger().info(f"Setting initial goal: {new_goal}")
+            else:
+                self.get_logger().info(f"Goal change detected: {new_goal} (was {old_goal})")
+        else:
+            self.get_logger().info(f"Goal unchanged: {new_goal}")
+            self.expecting_topic_goal = False  # We got the goal, no longer expecting
 
     def create_behavior_tree(self):
         root = py_trees.composites.Selector("Root", memory=False)
@@ -371,9 +369,8 @@ class BTStudentsNode(Node):
         self.get_logger().info("Behavior Tree with Improved Goal Handling:")
         print(py_trees.display.unicode_tree(root))
 
-    # NEW: Method to handle external service calls
+    # Method to handle external service calls
     def handle_external_service_call(self):
-        """Called when we detect an external service call"""
         self.last_external_service_time = time.time()
         self.expecting_topic_goal = True
         self.get_logger().info("External service call detected - waiting for goal from topic")
@@ -601,13 +598,11 @@ def main(args=None):
     rclpy.init(args=args)
     node = BTStudentsNode()
     
-    try:
-        rclpy.spin(node)
-    except KeyboardInterrupt:
-        pass
-    finally:
-        node.destroy_node()
-        rclpy.shutdown()
+
+    rclpy.spin(node)
+
+    node.destroy_node()
+    rclpy.shutdown()
 
 
 if __name__ == '__main__':
