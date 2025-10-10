@@ -91,11 +91,21 @@ class NavigateToGoal(py_trees.behaviour.Behaviour):
         dy = self.node.current_goal[1] - self.node.current_pose[1]
         distance = math.sqrt(dx**2 + dy**2)
         
-        # Check if goal is reached
-        if distance < 0.05:
-            self.node.get_logger().info(f"Goal reached! Distance: {distance:.2f}")
-            self.node.publish_zero_velocity()
-            self.node.current_goal = None
+        # Check if goal is reached (using 0.2m threshold as requested)
+        if distance <= 0.1:
+            #self.node.get_logger().info(f"Goal reached! Distance: {distance:.2f}")
+            #self.node.publish_zero_velocity()
+            self.node.get_logger().info("Final goal reached - deactivating robot")
+            self.node.deactivate_robot()
+            
+            # If this was the last goal, deactivate the robot
+            if distance < 0.2:
+                self.node.get_logger().info(f"Goal reached! Distance: {distance:.2f}")
+                self.node.publish_zero_velocity()
+                #self.node.get_logger().info("Final goal reached - deactivating robot")
+                #self.node.deactivate_robot()
+            
+                self.node.current_goal = None
             return py_trees.common.Status.SUCCESS
         
         # Use the improved navigation
@@ -167,6 +177,58 @@ class HandleGoalAsObstacle(py_trees.behaviour.Behaviour):
         return py_trees.common.Status.SUCCESS
 
 
+class DeactivateRobot(py_trees.behaviour.Behaviour):
+    def __init__(self, name, node):
+        super().__init__(name)
+        self.node = node
+        self.deactivation_requested = False
+        self.future = None
+        
+    def initialise(self):
+        self.deactivation_requested = False
+        self.future = None
+        
+    def update(self):
+        if not self.deactivation_requested:
+            if not self.node.deactivate_client.wait_for_service(timeout_sec=1.0):
+                self.node.get_logger().warn("Deactivate service not available")
+                return py_trees.common.Status.FAILURE
+            
+            self.node.get_logger().info("Sending deactivation request...")
+            request = Deactivate.Request()
+            self.future = self.node.deactivate_client.call_async(request)
+            self.deactivation_requested = True
+            return py_trees.common.Status.RUNNING
+        
+        if self.future is not None and self.future.done():
+            try:
+                response = self.future.result()
+                self.node.get_logger().info("Robot successfully deactivated")
+                self.node.active = False
+                self.deactivation_requested = False
+                return py_trees.common.Status.SUCCESS
+            except Exception as e:
+                self.node.get_logger().error(f"Error deactivating robot: {e}")
+                self.deactivation_requested = False
+                return py_trees.common.Status.FAILURE
+        
+        return py_trees.common.Status.RUNNING
+
+
+class CheckFinalGoalReached(py_trees.behaviour.Behaviour):
+    def __init__(self, name, node):
+        super().__init__(name)
+        self.node = node
+        
+    def update(self):
+        # Check if we received the last goal and don't have a current goal
+        # This means we successfully reached the final goal
+        if self.node.last_goal_received and self.node.current_goal is None:
+            self.node.get_logger().info("Final goal reached - should deactivate")
+            return py_trees.common.Status.SUCCESS
+        return py_trees.common.Status.FAILURE
+
+
 class BTStudentsNode(Node):
     def __init__(self):
         super().__init__('bt_students_node')
@@ -191,6 +253,7 @@ class BTStudentsNode(Node):
         self.current_yaw = None
         self.active = False
         self.scan_data = None
+        self.last_goal_received = False  # Track if we received the final goal
 
         # Coordinate-based obstacle avoidance parameters
         self.obstacle_detected = False
@@ -251,8 +314,17 @@ class BTStudentsNode(Node):
         # Build the main navigation selector in correct priority order
         main_navigation.add_children([goal_obstacle_handler, obstacle_avoider, navigate_to_goal])
         
-        # Active behavior sequence
-        active_behavior.add_children([get_goal_behavior, main_navigation])
+        # Check if we need to deactivate after final goal
+        deactivate_after_final_goal = py_trees.composites.Sequence("DeactivateAfterFinal", memory=False)
+        check_final_goal = CheckFinalGoalReached("CheckFinalGoalReached", self)
+        deactivate_robot = DeactivateRobot("DeactivateRobot", self)
+        deactivate_after_final_goal.add_children([check_final_goal, deactivate_robot])
+        
+        # Active behavior sequence - now includes deactivation check
+        active_behavior_sequence = py_trees.composites.Selector("ActiveBehaviorSequence", memory=False)
+        active_behavior_sequence.add_children([deactivate_after_final_goal, main_navigation])
+        
+        active_behavior.add_children([get_goal_behavior, active_behavior_sequence])
         
         # Use a repeater to continuously run the active behavior
         repeat_active = py_trees.decorators.Repeat(
@@ -270,13 +342,22 @@ class BTStudentsNode(Node):
         self.behaviour_tree = py_trees.trees.BehaviourTree(root)
         
         # Display the tree structure
-        self.get_logger().info("Behavior Tree with Proper Obstacle Handling:")
+        self.get_logger().info("Behavior Tree with Final Goal Deactivation:")
         print(py_trees.display.unicode_tree(root))
 
     def tick_bt(self):
         """Tick the behavior tree"""
         if hasattr(self, 'behaviour_tree'):
             self.behaviour_tree.tick()
+
+    def deactivate_robot(self):
+        """Helper method to deactivate the robot"""
+        if self.deactivate_client.wait_for_service(timeout_sec=1.0):
+            request = Deactivate.Request()
+            future = self.deactivate_client.call_async(request)
+            # Note: We don't wait for result here as it's handled in the behavior
+        else:
+            self.get_logger().warn("Deactivate service not available")
 
     def is_goal_itself_obstacle(self):
         """Check if the goal itself is detected as an obstacle (only when close to goal)"""
@@ -354,7 +435,6 @@ class BTStudentsNode(Node):
         
         return False
 
-    # Rest of the methods remain the same as before...
     def odom_callback(self, msg):
         self.current_pose = (msg.pose.pose.position.x, msg.pose.pose.position.y)
         self.current_orientation = msg.pose.pose.orientation
@@ -432,7 +512,6 @@ class BTStudentsNode(Node):
             return 1   # Turn left
         
     def execute_coordinate_based_avoidance(self):
-        """Execute obstacle avoidance using coordinate-based strategy"""
         velocity = Twist()
         
         if self.current_blocking_obstacle is None:
@@ -441,9 +520,12 @@ class BTStudentsNode(Node):
         avoidance_direction = self.calculate_avoidance_direction()
         
         velocity.linear.x = 0.1
-        velocity.angular.z = 0.3 * avoidance_direction
+        velocity.angular.z = 0.4 * avoidance_direction
         
-        self.get_logger().info(f"Avoiding obstacle: turning {'right' if avoidance_direction == -1 else 'left'}")
+        if avoidance_direction == -1:
+            self.get_logger().info("Avoiding obstacle: turning right") 
+        else: 
+            self.get_logger().info("Avoiding obstacle: turning left")
         
         return velocity
 
